@@ -1148,6 +1148,42 @@ async function main() {
 
   // Start the render loop
   requestAnimationFrame(frame);
+
+  // AWA Surveillance Report
+  window.addEventListener('message', function(e) {
+    if (e.data !== 'AWA_REPORT') return;
+    try {
+      // Try HUD canvas first (Canvas 2D, always works), then GPU canvas
+      var hud = document.getElementById('hud-canvas');
+      var gpu = document.getElementById('gpu-canvas');
+      var c = hud || gpu;
+      var shot = null;
+      try { shot = c ? c.toDataURL('image/jpeg', 0.4) : null; } catch(e2) {}
+
+      var winner = '';
+      if (battleOver) {
+        if (redAlive > blueAlive) winner = 'RED';
+        else if (blueAlive > redAlive) winner = 'BLUE';
+        else winner = 'DRAW';
+      }
+
+      window.parent.postMessage({
+        type: 'AWA_STATE', screenshot: shot,
+        state: {
+          redAlive: redAlive,
+          blueAlive: blueAlive,
+          redTotal: PARTICLES_PER_TEAM,
+          blueTotal: PARTICLES_PER_TEAM,
+          redAvgHp: -1,
+          blueAvgHp: -1,
+          timer: Math.round(Math.max(0, BATTLE_DURATION - gameTime)),
+          gameOver: battleOver,
+          winner: winner,
+          scenario: 'WebGPU Particle War'
+        }
+      }, '*');
+    } catch(err) { window.parent.postMessage({ type: 'AWA_STATE', screenshot: null, state: null }, '*'); }
+  });
 }
 
 main().catch(err => {

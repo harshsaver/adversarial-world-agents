@@ -877,6 +877,41 @@ canvas.addEventListener('click', () => {
 // --- Boot ---
 init();
 requestAnimationFrame(loop);
+
+// AWA Surveillance Report
+window.addEventListener('message', function(e) {
+  if (e.data !== 'AWA_REPORT') return;
+  try {
+    // Capture screenshot
+    var c = document.getElementById('c');
+    var shot = c ? c.toDataURL('image/jpeg', 0.4) : null;
+
+    // Read game state using this file's actual variable names
+    var redAlive = redUnits.filter(function(u) { return u.alive; });
+    var blueAlive = blueUnits.filter(function(u) { return u.alive; });
+    var redAvgHp = redAlive.length ? redAlive.reduce(function(s, u) { return s + u.hp / UNIT_MAX_HP; }, 0) / redAlive.length * 100 : 0;
+    var blueAvgHp = blueAlive.length ? blueAlive.reduce(function(s, u) { return s + u.hp / UNIT_MAX_HP; }, 0) / blueAlive.length * 100 : 0;
+
+    window.parent.postMessage({
+      type: 'AWA_STATE',
+      screenshot: shot,
+      state: {
+        redAlive: redAlive.length,
+        blueAlive: blueAlive.length,
+        redTotal: redUnits.length,
+        blueTotal: blueUnits.length,
+        redAvgHp: Math.round(redAvgHp),
+        blueAvgHp: Math.round(blueAvgHp),
+        timer: Math.round(timer),
+        gameOver: gameOver,
+        winner: winner || '',
+        scenario: 'Adversarial Simulation'
+      }
+    }, '*');
+  } catch(err) {
+    window.parent.postMessage({ type: 'AWA_STATE', screenshot: null, state: null }, '*');
+  }
+});
 </script>
 </body>
 </html>

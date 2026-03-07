@@ -918,6 +918,29 @@ function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
   hivePos = createVector(width * 0.78, height * 0.5);
 }
+
+// AWA Surveillance Report
+window.addEventListener('message', function(e) {
+  if (e.data !== 'AWA_REPORT') return;
+  try {
+    var c = document.querySelector('canvas');
+    var shot = c ? c.toDataURL('image/jpeg', 0.4) : null;
+    var ra = redSwarm.filter(function(u) { return u.alive; });
+    var ba = blueSwarm.filter(function(u) { return u.alive; });
+    var redAvgHp = ra.length ? ra.reduce(function(s,u) { return s + u.hp/u.maxHp; }, 0) / ra.length * 100 : 0;
+    var blueAvgHp = ba.length ? ba.reduce(function(s,u) { return s + u.hp/u.maxHp; }, 0) / ba.length * 100 : 0;
+    window.parent.postMessage({
+      type: 'AWA_STATE', screenshot: shot,
+      state: {
+        redAlive: ra.length, blueAlive: ba.length,
+        redTotal: redSwarm.length, blueTotal: blueSwarm.length,
+        redAvgHp: Math.round(redAvgHp), blueAvgHp: Math.round(blueAvgHp),
+        timer: Math.round(timer), gameOver: gameOver, winner: winner || '',
+        scenario: 'P5.js Swarm Combat'
+      }
+    }, '*');
+  } catch(err) { window.parent.postMessage({ type: 'AWA_STATE', screenshot: null, state: null }, '*'); }
+});
 </script>
 </body>
 </html>

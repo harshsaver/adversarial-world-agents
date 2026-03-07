@@ -586,11 +586,13 @@ let redKills = 0, blueKills = 0, engagements = 0;
 const phases = ['DEPLOYMENT', 'RECON', 'ENGAGEMENT', 'ASSAULT', 'CONSOLIDATION'];
 let currentPhase = 0;
 
-const GEMINI_API_KEY = 'AIzaSyCB8XRdrVE9U9Qph1iLPcl3NrNy-JJ9Gks';
+const GEMINI_API_KEY = 'AIzaSyClTBUsd8Q6Yp0BkUiQN-6b2pZw9gNEpsI';
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
 const NANOBANANA_MODEL = 'gemini-3.1-flash-image-preview';
 let geminiInFlight = false; // prevent overlapping requests
 let prevGameSnapshot = null; // track changes between turns
+let iframeReports = new Map(); // cam index -> {screenshot, state} from iframe postMessage
+let geminiCallCount = 0; // throttle: only call every other turn
 
 // Training pipeline state
 let pipelineCapturing = false;
@@ -650,6 +652,7 @@ function resetGrid() {
   missionStart = null; turnNumber = 0;
   redHealth = 100; blueHealth = 100;
   redKills = 0; blueKills = 0; engagements = 0; currentPhase = 0;
+  geminiCallCount = 0; iframeReports.clear();
   document.getElementById('red-reasoning').innerHTML = '';
   document.getElementById('blue-reasoning').innerHTML = '';
 
@@ -727,12 +730,28 @@ function advanceTurn() {
     blueHealth = totalBMax > 0 ? (totalBHP / totalBMax) * 100 : 0;
     redKills = rk; blueKills = bk;
     engagements = rk + bk;
-  } else {
-    // Multi-engine mode: simulate
-    redHealth = Math.max(5, redHealth - Math.random() * 5);
-    blueHealth = Math.max(5, blueHealth - Math.random() * 5);
-    if (Math.random() > 0.5) { redKills++; engagements++; }
-    if (Math.random() > 0.5) { blueKills++; engagements++; }
+  } else if (currentMode === 'multi') {
+    // Multi-engine mode: request real data from iframes
+    requestIframeReports();
+    // Stats will be updated by buildIframeStateSummary when Gemini is called
+    // For immediate display, use latest iframe reports
+    if (iframeReports.size > 0) {
+      let tRA = 0, tBA = 0, tRD = 0, tBD = 0;
+      for (const [, report] of iframeReports) {
+        if (!report.state) continue;
+        const s = report.state;
+        tRA += s.redAlive || 0;
+        tBA += s.blueAlive || 0;
+        tRD += (s.redTotal || 0) - (s.redAlive || 0);
+        tBD += (s.blueTotal || 0) - (s.blueAlive || 0);
+      }
+      const totalR = tRA + tRD || 1;
+      const totalB = tBA + tBD || 1;
+      redHealth = (tRA / totalR) * 100;
+      blueHealth = (tBA / totalB) * 100;
+      redKills = tBD; blueKills = tRD;
+      engagements = tRD + tBD;
+    }
   }
 
   document.getElementById('red-health').style.width = redHealth + '%';
@@ -750,6 +769,12 @@ function advanceTurn() {
     `${Math.max(5, Math.min(95, 100 - territory))}/${Math.max(5, Math.min(95, territory))}`;
 
   requestGeminiReasoning(turnNumber);
+
+  // Auto-capture training data every 3rd turn
+  if (turnNumber % 3 === 1 && games.length > 0) {
+    console.log('[PIPELINE] Auto-capturing on turn', turnNumber);
+    captureOnce();
+  }
 
   // Update running/completed counts
   let running = 0, completed = 0;
@@ -810,17 +835,123 @@ function extractGameState() {
   return state;
 }
 
-// Call Gemini for real tactical commentary
+// ============================================================
+// IFRAME postMessage COMMUNICATION (Multi-Engine Mode)
+// ============================================================
+window.addEventListener('message', function(e) {
+  if (e.data && e.data.type === 'AWA_STATE') {
+    // Find which iframe sent this
+    const iframes = document.querySelectorAll('.cell iframe');
+    for (let i = 0; i < iframes.length; i++) {
+      if (iframes[i].contentWindow === e.source) {
+        iframeReports.set(i, { screenshot: e.data.screenshot, state: e.data.state, ts: Date.now() });
+        break;
+      }
+    }
+  }
+});
+
+function requestIframeReports() {
+  const iframes = document.querySelectorAll('.cell iframe');
+  iframes.forEach(iframe => {
+    try { iframe.contentWindow.postMessage('AWA_REPORT', '*'); } catch(e) {}
+  });
+}
+
+// Get screenshot from same-engine mode (pick most active game)
+function getSameEngineScreenshot() {
+  if (games.length === 0) return null;
+  // Pick game with most engagement (most projectiles + alive units)
+  let bestGame = null, bestScore = -1;
+  for (const g of games) {
+    if (g.stopped) continue;
+    const score = g.proj.length * 3 + g.aU.filter(u => u.alive).length + g.bU.filter(u => u.alive).length + (g.over ? -100 : 0);
+    if (score > bestScore) { bestScore = score; bestGame = g; }
+  }
+  if (!bestGame) return null;
+  try { return bestGame.canvas.toDataURL('image/jpeg', 0.4); } catch(e) { return null; }
+}
+
+// Get best screenshot from iframe reports
+function getIframeScreenshot() {
+  let bestShot = null, bestScore = -1;
+  for (const [idx, report] of iframeReports) {
+    if (!report.screenshot || !report.state) continue;
+    const s = report.state;
+    // Score: prefer active games with units fighting
+    const score = (s.redAlive || 0) + (s.blueAlive || 0) + (s.gameOver ? -50 : 10);
+    if (score > bestScore) { bestScore = score; bestShot = report.screenshot; }
+  }
+  return bestShot;
+}
+
+// Build state summary from iframe reports (multi-engine mode)
+function buildIframeStateSummary(turn) {
+  const phase = phases[currentPhase];
+  let summary = `BATTLEFIELD STATUS (Turn ${turn}, Phase: ${phase}):\n`;
+  summary += `Monitoring ${iframeReports.size} surveillance feeds.\n`;
+
+  let totalRA = 0, totalBA = 0, totalRD = 0, totalBD = 0;
+  for (const [idx, report] of iframeReports) {
+    if (!report.state) continue;
+    const s = report.state;
+    totalRA += s.redAlive || 0;
+    totalBA += s.blueAlive || 0;
+    totalRD += (s.redTotal || 0) - (s.redAlive || 0);
+    totalBD += (s.blueTotal || 0) - (s.blueAlive || 0);
+
+    const camNum = String(idx + 1).padStart(2, '0');
+    if (s.gameOver) {
+      summary += `- CAM-${camNum} ${s.scenario}: ENDED, winner: ${s.winner}\n`;
+    } else {
+      summary += `- CAM-${camNum} ${s.scenario}: `;
+      summary += `Red: ${s.redAlive}/${s.redTotal} units`;
+      if (s.redAvgHp >= 0) summary += ` at ${s.redAvgHp}% hp`;
+      summary += `. Blue: ${s.blueAlive}/${s.blueTotal} units`;
+      if (s.blueAvgHp >= 0) summary += ` at ${s.blueAvgHp}% hp`;
+      summary += `. ${s.timer}s left.\n`;
+    }
+  }
+  summary += `Overall: Red ${totalRA} alive/${totalRD} dead. Blue ${totalBA} alive/${totalBD} dead.\n`;
+
+  // Update dashboard stats from iframe data
+  if (iframeReports.size > 0) {
+    const totalR = totalRA + totalRD || 1;
+    const totalB = totalBA + totalBD || 1;
+    redHealth = (totalRA / totalR) * 100;
+    blueHealth = (totalBA / totalB) * 100;
+    redKills = totalBD;
+    blueKills = totalRD;
+    engagements = totalRD + totalBD;
+  }
+
+  return summary;
+}
+
+// Call Gemini for real tactical commentary (MULTIMODAL: screenshot + text)
 async function requestGeminiReasoning(turn) {
-  if (geminiInFlight) return; // skip if previous request still pending
+  if (geminiInFlight) return;
+
+  // Throttle: only call Gemini every other turn to avoid rate limits
+  geminiCallCount++;
+  if (geminiCallCount % 2 === 0) return;
+
   geminiInFlight = true;
 
-  const state = games.length > 0 ? extractGameState() : null;
+  // For multi-engine mode, request fresh reports from iframes
+  if (currentMode === 'multi') {
+    requestIframeReports();
+    // Wait briefly for responses
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  const isSameEngine = games.length > 0;
   const phase = phases[currentPhase];
 
-  // Build a concise state summary for the prompt
+  // Build state summary
   let stateSummary = '';
-  if (state) {
+  if (isSameEngine) {
+    const state = extractGameState();
     stateSummary = `BATTLEFIELD STATUS (Turn ${turn}, Phase: ${phase}):\n`;
     stateSummary += `Overall: Red has ${state.totalRedAlive} alive, ${state.totalRedDead} dead. Blue has ${state.totalBlueAlive} alive, ${state.totalBlueDead} dead.\n`;
     stateSummary += `Red total health: ${Math.round(redHealth)}%. Blue total health: ${Math.round(blueHealth)}%.\n`;
@@ -836,26 +967,44 @@ async function requestGeminiReasoning(turn) {
         stateSummary += `${s.projectiles} projectiles in flight.\n`;
       }
     }
+  } else if (iframeReports.size > 0) {
+    stateSummary = buildIframeStateSummary(turn);
   } else {
     stateSummary = `Turn ${turn}, Phase: ${phase}. Red health: ${Math.round(redHealth)}%, Blue health: ${Math.round(blueHealth)}%. Red kills: ${redKills}, Blue kills: ${blueKills}.`;
   }
 
-  const prompt = `You are a military AI tactical analyst providing real-time commentary for a war simulation dashboard. Two AI agents (Red team and Blue team) are fighting across multiple battlefield scenarios simultaneously.
+  // Get screenshot (base64 JPEG)
+  const screenshot = isSameEngine ? getSameEngineScreenshot() : getIframeScreenshot();
+
+  const promptText = `You are a military AI tactical analyst watching a live war simulation. Two AI agents (Red team and Blue team) are fighting.
+
+${screenshot ? 'I have attached a screenshot of the current battlefield. Analyze what you SEE in the image — unit positions, formations, who is advancing/retreating, explosions, clustering, flanking moves.' : ''}
 
 ${stateSummary}
 
-For EACH agent (Red and Blue), provide tactical reasoning for this turn in exactly this format. Be specific to the actual game state above - reference real unit counts, health percentages, scenario names, positions, and engagement status. Keep each line under 15 words. Be terse, tactical, and specific.
+For EACH agent (Red and Blue), provide tactical reasoning based on the ACTUAL game state${screenshot ? ' and the screenshot' : ''}. Reference real unit counts, health, positions, and what you observe. Keep each line under 15 words. Be terse, tactical, specific.
 
-Respond in this EXACT JSON format only, no markdown:
+Respond in EXACT JSON only, no markdown:
 {"red":{"saw":"...","plan":"...","risk":"...","did":"..."},"blue":{"saw":"...","plan":"...","risk":"...","did":"..."}}`;
+
+  // Build request parts (multimodal if screenshot available)
+  const parts = [];
+  if (screenshot) {
+    // Extract base64 data and mime type from data URL
+    const match = screenshot.match(/^data:(image\/\w+);base64,(.+)$/);
+    if (match) {
+      parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+    }
+  }
+  parts.push({ text: promptText });
 
   try {
     const resp = await fetch(GEMINI_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.9, maxOutputTokens: 256 }
+        contents: [{ parts }],
+        generationConfig: { temperature: 0.9, maxOutputTokens: 300 }
       })
     });
 
@@ -864,7 +1013,6 @@ Respond in this EXACT JSON format only, no markdown:
     const data = await resp.json();
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
-    // Extract JSON from response (handle possible markdown wrapping)
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('No JSON in response');
 
@@ -875,15 +1023,37 @@ Respond in this EXACT JSON format only, no markdown:
 
   } catch (err) {
     console.warn('Gemini reasoning failed, using fallback:', err.message);
-    // Fallback: generate basic reasoning from game state
-    if (games.length > 0) {
+    if (isSameEngine) {
       const state = extractGameState();
       insertReasoningEntry('red', turn, generateFallbackReasoning(state, 'red'));
       insertReasoningEntry('blue', turn, generateFallbackReasoning(state, 'blue'));
+    } else if (iframeReports.size > 0) {
+      insertReasoningEntry('red', turn, generateIframeFallback('red'));
+      insertReasoningEntry('blue', turn, generateIframeFallback('blue'));
     }
   } finally {
     geminiInFlight = false;
   }
+}
+
+function generateIframeFallback(agent) {
+  let totalRA = 0, totalBA = 0, totalRD = 0, totalBD = 0, activeCount = 0;
+  for (const [idx, report] of iframeReports) {
+    if (!report.state) continue;
+    const s = report.state;
+    totalRA += s.redAlive || 0;
+    totalBA += s.blueAlive || 0;
+    totalRD += (s.redTotal || 0) - (s.redAlive || 0);
+    totalBD += (s.blueTotal || 0) - (s.blueAlive || 0);
+    if (!s.gameOver) activeCount++;
+  }
+  const isRed = agent === 'red';
+  return {
+    saw: `${isRed ? totalBA : totalRA} enemy units across ${activeCount} active feeds`,
+    plan: `Coordinating operations across ${activeCount} surveillance sectors`,
+    risk: `${isRed ? totalRD : totalBD} friendly casualties across all theaters`,
+    did: `${isRed ? totalBD : totalRD} enemy eliminations confirmed`,
+  };
 }
 
 function generateFallbackReasoning(state, agent) {
@@ -998,16 +1168,35 @@ function buildTacticalPrompt(state) {
 
 async function generateTacticalFrame(state) {
   const prompt = buildTacticalPrompt(state);
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${NANOBANANA_MODEL}:generateContent`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-    }
-  );
-  if (!response.ok) throw new Error(`API ${response.status}: ${(await response.text()).substring(0, 200)}`);
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${NANOBANANA_MODEL}:generateContent`;
+  const body = { contents: [{ parts: [{ text: prompt }] }] };
+  console.log('[NANOBANANA] Fetching:', url);
+  console.log('[NANOBANANA] Request body:', JSON.stringify(body).substring(0, 300));
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY },
+    body: JSON.stringify(body),
+  });
+
+  console.log('[NANOBANANA] Response status:', response.status, response.statusText);
+  if (!response.ok) {
+    const errText = await response.text();
+    console.error('[NANOBANANA] Error response body:', errText.substring(0, 500));
+    throw new Error(`API ${response.status}: ${errText.substring(0, 200)}`);
+  }
+
   const data = await response.json();
+  console.log('[NANOBANANA] Response JSON keys:', Object.keys(data));
+  console.log('[NANOBANANA] Candidates count:', data.candidates?.length || 0);
+  if (data.candidates?.[0]) {
+    console.log('[NANOBANANA] First candidate parts:', data.candidates[0].content?.parts?.map(p => ({
+      hasText: !!p.text, textLen: p.text?.length || 0,
+      hasInlineData: !!p.inlineData, mimeType: p.inlineData?.mimeType,
+      dataLen: p.inlineData?.data?.length || 0,
+    })));
+  }
+
   let imageData = null, textResponse = '';
   if (data.candidates?.[0]?.content) {
     for (const part of data.candidates[0].content.parts) {
@@ -1015,6 +1204,7 @@ async function generateTacticalFrame(state) {
       if (part.text) textResponse = part.text;
     }
   }
+  console.log('[NANOBANANA] Final result — hasImage:', !!imageData, 'textLen:', textResponse.length);
   return { imageData, textResponse, prompt };
 }
 
@@ -1076,23 +1266,34 @@ function addTurnCard(turnId, state, frameResult) {
 }
 
 async function captureOnce() {
-  if (games.length === 0) return;
+  console.log('[PIPELINE] captureOnce called, games.length:', games.length);
+  if (games.length === 0) { console.warn('[PIPELINE] No games running, skipping capture'); return; }
   pipelineTurnCount++;
 
   const state = captureMultiGameState();
+  console.log('[PIPELINE] Captured state for turn', pipelineTurnCount, '— scenarios:', state.scenarios.length, state.summary);
+
   const entry = { turn: pipelineTurnCount, state, frame_pending: true };
   pipelineTurnData.push(entry);
 
   document.getElementById('pipeline-dot').className = 'status-dot active';
   document.getElementById('pipeline-status').textContent = 'GENERATING...';
 
+  // Add turn card immediately (frame will fill in async)
+  const prompt = buildTacticalPrompt(state);
+  console.log('[PIPELINE] NanoBanana prompt (first 200 chars):', prompt.substring(0, 200));
+  console.log('[PIPELINE] Calling NanoBanana API — model:', NANOBANANA_MODEL, 'key prefix:', GEMINI_API_KEY.substring(0, 10) + '...');
+
   const framePromise = generateTacticalFrame(state).then(result => {
+    console.log('[PIPELINE] NanoBanana response received — hasImage:', !!result.imageData, 'textLen:', result.textResponse?.length || 0);
+    if (result.imageData) console.log('[PIPELINE] Image data prefix:', result.imageData.substring(0, 60));
     entry.frame_pending = false;
     entry.frame_base64 = result.imageData;
     document.getElementById('pipeline-dot').className = 'status-dot idle';
     document.getElementById('pipeline-status').textContent = 'READY';
     return result;
   }).catch(err => {
+    console.error('[PIPELINE] NanoBanana ERROR:', err.message);
     entry.frame_pending = false;
     entry.frame_error = err.message;
     document.getElementById('pipeline-dot').className = 'status-dot idle';
@@ -1102,6 +1303,7 @@ async function captureOnce() {
 
   addTurnCard(pipelineTurnCount, state, framePromise);
   document.getElementById('pipe-turn-count').textContent = `${pipelineTurnCount} turns`;
+  console.log('[PIPELINE] Turn card added, total turns:', pipelineTurnCount);
 }
 
 function toggleCapture() {

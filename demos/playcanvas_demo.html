@@ -154,6 +154,7 @@ const app = new pc.Application(canvas, {
     graphicsDeviceOptions: {
         antialias: true,
         alpha: false,
+        preserveDrawingBuffer: true,
         preferWebGl2: true,
         powerPreference: 'high-performance'
     }
@@ -1312,6 +1313,37 @@ app.on('update', function(dt) {
 });
 
 app.start();
+
+// AWA Surveillance Report
+window.addEventListener('message', function(e) {
+  if (e.data !== 'AWA_REPORT') return;
+  try {
+    var c = document.getElementById('app-canvas');
+    var shot = c ? c.toDataURL('image/jpeg', 0.4) : null;
+    var ra = units.filter(function(u) { return u.team === 'red' && u.alive; });
+    var ba = units.filter(function(u) { return u.team === 'blue' && u.alive; });
+    var redTotal = units.filter(function(u) { return u.team === 'red'; }).length;
+    var blueTotal = units.filter(function(u) { return u.team === 'blue'; }).length;
+    var redAvgHp = ra.length ? ra.reduce(function(s, u) { return s + u.hp / u.maxHp; }, 0) / ra.length * 100 : 0;
+    var blueAvgHp = ba.length ? ba.reduce(function(s, u) { return s + u.hp / u.maxHp; }, 0) / ba.length * 100 : 0;
+    var winner = '';
+    if (gameOver) {
+      if (ra.length === 0 && ba.length === 0) winner = 'Draw';
+      else if (ba.length > 0) winner = 'Blue';
+      else winner = 'Red';
+    }
+    window.parent.postMessage({
+      type: 'AWA_STATE', screenshot: shot,
+      state: {
+        redAlive: ra.length, blueAlive: ba.length,
+        redTotal: redTotal, blueTotal: blueTotal,
+        redAvgHp: Math.round(redAvgHp), blueAvgHp: Math.round(blueAvgHp),
+        timer: Math.round(gameTime), gameOver: gameOver, winner: winner,
+        scenario: 'PlayCanvas 3D'
+      }
+    }, '*');
+  } catch(err) { window.parent.postMessage({ type: 'AWA_STATE', screenshot: null, state: null }, '*'); }
+});
 
 })();
 </script>

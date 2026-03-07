@@ -184,7 +184,7 @@ function init() {
   camera.lookAt(0, 0, 0);
 
   // Renderer
-  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
@@ -835,6 +835,38 @@ function restartSimulation() {
 
 // ─── START ──────────────────────────────────────────────────
 init();
+
+// AWA Surveillance Report
+window.addEventListener('message', function(e) {
+  if (e.data !== 'AWA_REPORT') return;
+  try {
+    var c = document.querySelector('canvas');
+    var shot = c ? c.toDataURL('image/jpeg', 0.4) : null;
+
+    var ra = redUnits.filter(function(u) { return u.alive; });
+    var ba = blueUnits.filter(function(u) { return u.alive; });
+    var redAvgHp = ra.length ? ra.reduce(function(s,u) { return s + u.hp/MAX_HP; }, 0) / ra.length * 100 : 0;
+    var blueAvgHp = ba.length ? ba.reduce(function(s,u) { return s + u.hp/MAX_HP; }, 0) / ba.length * 100 : 0;
+
+    var winnerText = document.getElementById('winner-text');
+    var winnerVal = gameOver && winnerText ? winnerText.textContent : '';
+
+    window.parent.postMessage({
+      type: 'AWA_STATE',
+      screenshot: shot,
+      state: {
+        redAlive: ra.length, blueAlive: ba.length,
+        redTotal: redUnits.length, blueTotal: blueUnits.length,
+        redAvgHp: Math.round(redAvgHp), blueAvgHp: Math.round(blueAvgHp),
+        timer: Math.round(elapsedTime),
+        gameOver: gameOver, winner: winnerVal,
+        scenario: 'Three.js 3D Combat'
+      }
+    }, '*');
+  } catch(err) {
+    window.parent.postMessage({ type: 'AWA_STATE', screenshot: null, state: null }, '*');
+  }
+});
 </script>
 </body>
 </html>

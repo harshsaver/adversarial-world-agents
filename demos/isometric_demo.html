@@ -1342,6 +1342,30 @@ function loop(time) {
 }
 
 requestAnimationFrame(loop);
+
+// AWA Surveillance Report
+window.addEventListener('message', function(e) {
+  if (e.data !== 'AWA_REPORT') return;
+  try {
+    var shot = C ? C.toDataURL('image/jpeg', 0.4) : null;
+    var ra = units.filter(function(u) { return u.team === 'red' && u.alive; });
+    var ba = units.filter(function(u) { return u.team === 'blue' && u.alive; });
+    var redTotal = units.filter(function(u) { return u.team === 'red'; });
+    var blueTotal = units.filter(function(u) { return u.team === 'blue'; });
+    var redAvgHp = ra.length ? ra.reduce(function(s,u) { return s + u.hp/u.maxHp; }, 0) / ra.length * 100 : 0;
+    var blueAvgHp = ba.length ? ba.reduce(function(s,u) { return s + u.hp/u.maxHp; }, 0) / ba.length * 100 : 0;
+    window.parent.postMessage({
+      type: 'AWA_STATE', screenshot: shot,
+      state: {
+        redAlive: ra.length, blueAlive: ba.length,
+        redTotal: redTotal.length, blueTotal: blueTotal.length,
+        redAvgHp: Math.round(redAvgHp), blueAvgHp: Math.round(blueAvgHp),
+        timer: Math.round(gameTime / 1000), gameOver: gameOver, winner: winner || '',
+        scenario: 'Isometric Tactical'
+      }
+    }, '*');
+  } catch(err) { window.parent.postMessage({ type: 'AWA_STATE', screenshot: null, state: null }, '*'); }
+});
 </script>
 </body>
 </html>
