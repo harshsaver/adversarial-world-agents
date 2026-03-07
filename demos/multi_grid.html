@@ -585,7 +585,8 @@
   </div>
   <div class="bottom-center">
     <div class="stat-item">KILLS <span class="stat-val" id="stat-kills-r" style="color:#ff6b6b">0</span>/<span class="stat-val" id="stat-kills-b" style="color:#6ba3ff">0</span></div>
-    <div class="stat-item">TERRITORY <span class="stat-val" id="stat-territory">50/50</span></div>
+    <div class="stat-item" style="color:#ff6b6b">RED <span class="stat-val" id="red-move-display" style="color:#ff9b9b;font-size:9px">ATTACK_NEAREST</span></div>
+    <div class="stat-item" style="color:#6ba3ff">BLU <span class="stat-val" id="blue-move-display" style="color:#9bc3ff;font-size:9px">DEFEND_OBJECTIVE</span></div>
     <div class="stat-item">ENGAGEMENTS <span class="stat-val" id="stat-engagements">0</span></div>
   </div>
   <div class="bottom-right">
@@ -821,7 +822,10 @@ function advanceTurn() {
   document.getElementById('stat-territory').textContent =
     `${Math.max(5, Math.min(95, 100 - territory))}/${Math.max(5, Math.min(95, territory))}`;
 
-  requestGeminiReasoning(turnNumber);
+  // Only use old reasoning system if agent control is off (agent control handles its own reasoning)
+  if (!agentControlEnabled || currentMode === 'multi') {
+    requestGeminiReasoning(turnNumber);
+  }
 
   // Auto-capture training data every 3rd turn (both modes)
   if (turnNumber % 3 === 1) {
@@ -1129,6 +1133,12 @@ async function requestAgentMoves() {
     console.log(`%c[AGENT] Moves received (${elapsed}ms): RED=${redMove} BLUE=${blueMove}`, 'color: #ffaa00; font-weight: bold');
     console.log(`[AGENT] RED reasoning:`, redResult.reasoning);
     console.log(`[AGENT] BLU reasoning:`, blueResult.reasoning);
+
+    // Update HUD move display
+    const redMoveEl = document.getElementById('red-move-display');
+    const blueMoveEl = document.getElementById('blue-move-display');
+    if (redMoveEl) { redMoveEl.textContent = redMove; redMoveEl.style.transition = 'opacity 0.2s'; redMoveEl.style.opacity = '1'; }
+    if (blueMoveEl) { blueMoveEl.textContent = blueMove; blueMoveEl.style.transition = 'opacity 0.2s'; blueMoveEl.style.opacity = '1'; }
 
     // Feed reasoning into sidebar
     if (redResult.reasoning) insertReasoningEntry('red', turn, { ...redResult.reasoning, did: `${redMove}: ${redResult.reasoning.did || '--'}` });
@@ -2368,6 +2378,10 @@ function tick(now){
   for(const g of games){
     if(g.stopped)continue;
     updateGame(g,dt);renderGame(g);
+  }
+  // Fire agent move requests async (non-blocking, respects its own interval)
+  if(agentControlEnabled && games.length>0 && !agentInFlight){
+    requestAgentMoves();
   }
   if(games.length>0)sameRAF=requestAnimationFrame(tick);
 }
