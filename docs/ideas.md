@@ -1,119 +1,177 @@
 # Visual Environment Options Explored
 
-During ideation, we explored many different visual environment approaches for the adversarial simulation. Here is a summary of every option considered, with pros/cons and status.
+During ideation, we explored many different visual environment approaches for the adversarial simulation. We built **10 interactive demos** across different engines to compare visual quality, performance, and AI-hookability side by side.
 
 ---
 
-## 1. HTML Canvas 2D Grid
+## Engine Comparison Matrix
 
-**Status: Viable (simplest)**
+| Engine | File | Size | Visual Quality | AI Hookability | Physics | Performance |
+|--------|------|------|---------------|----------------|---------|-------------|
+| **Babylon.js + Havok** | `babylon_demo.html` | 44KB | Excellent | Excellent | AAA (Havok WASM) | 60fps, 1000+ units |
+| **Three.js Advanced** | `threejs_advanced_demo.html` | 62KB | Excellent | Good | cannon-es | 60fps |
+| **PlayCanvas** | `playcanvas_demo.html` | 48KB | Very Good | Good | Ammo.js | 60fps |
+| **WebGPU Compute** | `webgpu_demo.html` | 35KB | Stunning | Poor (no game structure) | GPU compute | 60fps, 5000 particles |
+| **PixiJS Tactical** | `pixi_demo.html` | 29KB | Very Good (2D) | Good | None (manual) | 60fps |
+| **Isometric Canvas** | `isometric_demo.html` | 42KB | Good | Good | None (manual) | 60fps |
+| **Three.js Basic** | `threejs_demo.html` | 26KB | Good | Good | cannon-es | 60fps |
+| **p5.js Swarm** | `p5_demo.html` | 25KB | Beautiful | Medium | Steering only | 60fps |
+| **Matter.js** | `matter_demo.html` | 23KB | Medium | Easy | Matter.js 2D | 60fps |
+| **Pure Canvas** | `canvas_demo.html` | 24KB | Medium | Easy | None (manual) | 60fps |
 
-A basic 2D grid rendered on HTML Canvas. Units occupy cells, move between cells, and combat happens when units are adjacent.
+---
 
-- **Pros:** Simplest to build, guaranteed to work, easy to snapshot state, very fast
-- **Cons:** Least visually impressive, no physics, grid-based movement feels artificial
-- **Best for:** Rapid prototyping, guaranteed demo
+## Recommended: Babylon.js 8.0 + Havok + Yuka.js
 
-## 2. Matter.js 2D Physics
+Based on extensive research, **Babylon.js 8.0** is the best choice for the hackathon:
 
-**Status: Viable (good balance)**
+- **Havok Physics** — Same engine behind Halo, Half-Life 2, Skyrim. Runs as WASM.
+- **1000+ animated soldiers at 144fps** via instanced meshes
+- **Built-in Recast pathfinding** with crowd navigation
+- **PBR materials, area lights, WebGPU native shaders**
+- **All from CDN** — single HTML file, zero build step
+- **Built-in GUI system** for HUD overlays
 
-Full 2D physics simulation using [Matter.js](https://brm.io/matter-js/). Continuous movement, real collisions, obstacles, and walls.
+Add **Yuka.js** for game AI:
+- Steering behaviors: pursuit, evade, flee, arrive, wander, formation control
+- State machines and behavior trees
+- Engine-agnostic — plug in Gemini at the decision layer
 
-- **Pros:** Good visual quality, real physics, relatively simple API, well-documented
-- **Cons:** 2D only, physics can get chaotic with many units
-- **Best for:** Balance of visual quality and buildability
-- **Demo:** See `demos/matter_demo.html`
+---
 
-## 3. Three.js + cannon-es 3D
+## Detailed Engine Assessments
 
-**Status: Viable (most impressive)**
+### 1. Babylon.js + Havok (RECOMMENDED)
 
-Full 3D arena using [Three.js](https://threejs.org/) for rendering and [cannon-es](https://pmndrs.github.io/cannon-es/) for physics.
+**File:** `demos/babylon_demo.html` (44KB)
 
-- **Pros:** Most visually impressive, cinematic camera, shadows, lighting, fog
-- **Cons:** More complex to build, 3D state harder to snapshot for agents, performance considerations
-- **Best for:** Maximum visual impact for judges/demos
-- **Demo:** See `demos/threejs_demo.html`
+Features built:
+- PBR materials with metallic/roughness
+- Havok physics for projectile ballistics and collision
+- Particle systems for explosions, trails, death effects
+- Post-processing: bloom, tone mapping, vignette
+- Dynamic lighting with shadow casting
+- Cinematic auto-orbit camera
+- HUD with team scores and battle timer
+- 8v8 unit combat with AI behaviors
 
-## 4. p5.js Swarm
+**Why it wins:** Most complete out-of-the-box. Havok physics, Recast pathfinding, GUI system, area lights — all built in. The API surface for hooking AI agents is clean.
 
-**Status: Viable (most artistic)**
+### 2. Advanced Three.js
 
-Bioluminescent deep-sea swarm simulation using [p5.js](https://p5js.org/) with flocking behaviors.
+**File:** `demos/threejs_advanced_demo.html` (62KB, largest demo)
 
-- **Pros:** Most visually beautiful, additive blending creates stunning effects, unique aesthetic
-- **Cons:** Swarm behavior harder to map to strategic AI decisions, more organic than tactical
-- **Best for:** Artistic impression, unique visual identity
-- **Demo:** See `demos/p5_demo.html`
+Features built:
+- Procedural terrain with vertex displacement (perlin noise)
+- Reflective water plane with custom shader
+- Procedural sky with sun position
+- GPU instanced meshes (InstancedMesh) for 10v10 teams
+- Projectile system with gravity arcs and trail particles
+- Post-processing: UnrealBloomPass, SMAAPass, vignette
+- Exponential fog atmosphere
+- Dynamic point lights on explosions
+- Cinematic camera with vertical bob
+- HUD with kill feed and minimap
 
-## 5. Pure Canvas (No Dependencies)
+**Why it's strong:** Most flexible, largest ecosystem, best documentation. But requires more manual assembly than Babylon.js.
 
-**Status: Viable (fastest)**
+### 3. PlayCanvas
 
-Zero-dependency simulation using only the native HTML5 Canvas API.
+**File:** `demos/playcanvas_demo.html` (48KB)
 
-- **Pros:** No dependencies, maximum performance, full control, works everywhere, ranged combat with projectiles
-- **Cons:** Must implement everything from scratch, no physics engine
-- **Best for:** Reliability, performance, no dependency risk
-- **Demo:** See `demos/canvas_demo.html`
+Features built:
+- Built-in Ammo.js physics
+- 6v6 unit combat
+- Particle trails and bloom
+- Skybox and shadows
+- Clean entity-component architecture
 
-## 6. Harsh's Polytopia Clone
+**Why it's worth considering:** Console-quality visuals. Powers commercial browser games (Robostorm, Mini Royale). But less documentation than Babylon.js/Three.js.
 
-**Status: Considered**
+### 4. WebGPU Compute Shaders
 
-A 3D hexagonal terrain strategy game clone already built by team member Harsh.
+**File:** `demos/webgpu_demo.html` (35KB)
 
+Features built:
+- Pure WebGPU with WGSL shaders (no libraries)
+- GPU compute for 5000 particles with full N-body interactions
+- Flocking behaviors: separation, alignment, cohesion
+- Combat system resolved entirely on GPU
+- Additive blending for nebula/glow effects
+- Ping-pong texture trail system
+- Instanced rendering (30,000 vertices/frame)
+
+**Why it's stunning:** Visually the most impressive — 5000 glowing particles fighting with trails and glow. But no game structure (no units, health, strategy). Best as a visual layer, not a game engine.
+
+### 5. PixiJS Military Tactical Display
+
+**File:** `demos/pixi_demo.html` (29KB)
+
+Features built:
+- Military C4ISR command center aesthetic
+- Radar sweep effect with fading trail
+- Hex grid overlay
+- Fog of war with radial gradient cutouts
+- 12v12 units with military NATO-style icons
+- Targeting lines, threat circles, engagement effects
+- Scanline CRT overlay
+- Status panels, combat log, sector control display
+- Minimap with real-time unit tracking
+
+**Why it's unique:** Completely different aesthetic — looks like a NORAD war room display. Would make a striking demo for judges. Good for the "strategic command" angle.
+
+### 6. Isometric Canvas Strategy
+
+**File:** `demos/isometric_demo.html` (42KB)
+
+Features built:
+- Pure Canvas 2D, zero dependencies
+- 20x20 isometric tile map
+- Multiple terrain types: grass, water, mountains, forest, desert
+- Buildings: barracks, towers, walls, HQ
+- Unit types: infantry, cavalry, archers
+- Day/night cycle
+- Fog of war, minimap, battle log
+- Camera scrolling and zoom
+
+**Why it's relevant:** Closest to the Polytopia/Civilization aesthetic. Harsh's existing canvases (Polytopia clone, IsoCity) could be adapted to this style.
+
+---
+
+## Harsh's Existing Canvases
+
+### Polytopia Clone
 - **Repo:** [github.com/harshsaver/polytopia](https://github.com/harshsaver/polytopia)
 - **Deployed:** [polytopia-seven.vercel.app](https://polytopia-seven.vercel.app)
-- **Features:** 3D hex terrain, existing canvas rendering, unit placement, terrain types
-- **Pros:** Already built, visually impressive, hex grid is great for strategy AI
-- **Cons:** Would need to adapt for adversarial agents, existing codebase to learn
+- **Tech:** Pure JS + Three.js, isometric hex terrain, 3 unit types, 16x16 grid
+- **Status:** Would need refactoring to add programmatic API (currently click-driven)
 
-## 7. Harsh's IsoCity
-
-**Status: Considered (great for infrastructure scenarios)**
-
-An isometric city builder already built by team member Harsh.
-
+### IsoCity
+- **Repo:** [github.com/harshsaver/isometric-city](https://github.com/harshsaver/isometric-city)
 - **Deployed:** [isometric-city-swart.vercel.app](https://isometric-city-swart.vercel.app)
-- **Features:** Isometric rendering, building placement, city infrastructure
-- **Pros:** Perfect for "one builds, one destroys" scenarios, already built
-- **Cons:** Not designed for combat, would need significant adaptation
-
-## 8. Minecraft via Mineflayer
-
-**Status: Approved but rejected (too complex)**
-
-Using [Mineflayer](https://github.com/PrismarineJS/mineflayer) to control Minecraft bots in a Minecraft server.
-
-- **Pros:** Rich 3D environment, judges explicitly approved this approach, huge existing ecosystem
-- **Cons:** Requires running a Minecraft server, complex setup, latency issues, hard to snapshot state cleanly
-- **Judge feedback:** Judges said this would be fine but acknowledged the setup complexity
-
-## 9. Polytopia-style Turn-based
-
-**Status: Rejected**
-
-A turn-based strategy game where agents take turns (like the board game Polytopia).
-
-- **Rejection reason:** Real life is simultaneous, not turn-based. The whole point of the project is that both agents act at the same time, creating emergent adversarial dynamics. Turn-based removes the simultaneity that makes the data interesting.
+- **Tech:** Next.js + TypeScript, ~90 building types, full simulation
+- **Status:** Has clean programmatic API via `setTool()` + `placeAtTile(x, y)`. Good candidate for "one builds, one destroys" scenario.
 
 ---
 
-## Decision Matrix
+## Other Engines Considered but Not Built
 
-| Option | Visual Quality | Build Speed | Agent Integration | State Snapshotting |
-|--------|---------------|-------------|-------------------|-------------------|
-| Canvas 2D Grid | Low | Fast | Easy | Easy |
-| Matter.js | Medium-High | Medium | Medium | Easy |
-| Three.js 3D | Very High | Slow | Hard | Medium |
-| p5.js Swarm | Very High | Medium | Medium | Easy |
-| Pure Canvas | Medium | Medium | Medium | Easy |
-| Polytopia | High | Fast (existing) | Medium | Medium |
-| IsoCity | Medium | Fast (existing) | Hard | Medium |
-| Minecraft | Very High | Very Slow | Hard | Hard |
+### Minecraft via Mineflayer
+- Judges approved this approach but setup complexity is too high for a hackathon
+- Rich 3D environment but hard to snapshot state cleanly
 
-## Final Approach
+### Turn-based (Polytopia-style)
+- **Rejected** — real life is simultaneous, not turn-based. The whole point is both agents act at the same time.
 
-We built demos for the top four options (Matter.js, Three.js, p5.js, Pure Canvas) to let the team compare them side by side and decide based on the actual visual output. All four are included in the `demos/` folder.
+---
+
+## Relevant Open-Source Projects
+
+| Project | Description | Relevance |
+|---------|-------------|-----------|
+| [WarAgent](https://github.com/agiresearch/WarAgent) | LLM-based multi-agent war simulation | Exact same concept, Apache 2.0 |
+| [wargame-agents](https://www.seangoedecke.com/wargame-agents/) | RTS with text orders to AI generals | Directly relevant to LLM agent concept |
+| [Kiomet](https://github.com/SoftbearStudios/kiomet) | Rust+WASM hex-grid multiplayer RTS | Polished visual reference |
+| [Freeciv-web](https://github.com/freeciv/freeciv-web) | Full Civilization game in Three.js+WebGL | AI opponent reference |
+| [Yuka.js](https://github.com/Mugen87/yuka) | Game AI: steering, state machines, pursuit/evade | Agent behavior layer |
+| [AgentScript](https://agentscript.org/) | NetLogo-like ABM with Three.js 3D viz | Agent-based modeling reference |

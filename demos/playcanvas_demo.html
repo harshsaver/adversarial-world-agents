@@ -1,0 +1,1319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Adversarial Simulation - PlayCanvas</title>
+<script src="https://code.playcanvas.com/playcanvas-stable.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+canvas#app-canvas { width: 100vw; height: 100vh; display: block; }
+
+/* Bloom overlay canvas */
+canvas#bloom-canvas {
+    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    pointer-events: none; z-index: 1; mix-blend-mode: screen;
+    opacity: 0.35;
+}
+
+#hud {
+    position: fixed; top: 0; left: 0; right: 0;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 14px 20px; pointer-events: none; z-index: 10;
+}
+.hud-panel {
+    background: linear-gradient(135deg, rgba(0,0,0,0.75), rgba(10,10,30,0.65));
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px; padding: 10px 18px;
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    color: #fff; font-size: 14px; min-width: 140px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+}
+.hud-panel.center { text-align: center; min-width: 180px; }
+.hud-panel.right { text-align: right; }
+#timer {
+    font-size: 30px; font-weight: 700; letter-spacing: 3px;
+    font-variant-numeric: tabular-nums;
+    background: linear-gradient(180deg, #fff, #aab);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.team-label { font-weight: 700; margin-bottom: 2px; letter-spacing: 2px; font-size: 11px; text-transform: uppercase; }
+.red-text { color: #ff4444; text-shadow: 0 0 8px rgba(255,68,68,0.5); }
+.blue-text { color: #4488ff; text-shadow: 0 0 8px rgba(68,136,255,0.5); }
+.count { font-size: 24px; font-weight: 700; }
+.status-line { font-size: 10px; color: rgba(255,255,255,0.35); margin-top: 4px; letter-spacing: 1px; }
+
+#winner-overlay {
+    position: fixed; inset: 0; display: none; z-index: 20;
+    justify-content: center; align-items: center;
+    background: rgba(0,0,0,0.6); backdrop-filter: blur(8px);
+}
+#winner-box {
+    background: linear-gradient(135deg, rgba(0,0,0,0.9), rgba(10,10,30,0.85));
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 16px; padding: 40px 60px; text-align: center;
+    box-shadow: 0 0 60px rgba(0,0,0,0.6);
+}
+#winner-text { font-size: 44px; font-weight: 800; color: #fff; margin-bottom: 8px; letter-spacing: 4px; }
+#winner-sub { font-size: 15px; color: rgba(255,255,255,0.5); }
+#restart-btn {
+    margin-top: 24px; padding: 10px 32px; font-size: 14px; font-weight: 600;
+    background: rgba(255,255,255,0.1); color: #fff;
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 6px; cursor: pointer; pointer-events: all;
+    letter-spacing: 2px; text-transform: uppercase;
+    transition: all 0.2s;
+}
+#restart-btn:hover { background: rgba(255,255,255,0.2); border-color: rgba(255,255,255,0.4); }
+
+#bottom-hud {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    pointer-events: none; z-index: 10;
+    padding: 0 20px 14px;
+    display: flex; justify-content: space-between; align-items: flex-end;
+    background: linear-gradient(0deg, rgba(0,0,0,0.4) 0%, transparent 100%);
+}
+#unit-bars { display: flex; gap: 12px; }
+.bar-group { display: flex; flex-direction: column; gap: 2px; }
+.bar-group-title { font-size: 9px; color: rgba(255,255,255,0.35); letter-spacing: 1px; text-transform: uppercase; margin-bottom: 2px; }
+.unit-bar {
+    display: flex; align-items: center; gap: 5px; font-size: 10px;
+}
+.unit-bar-label { width: 18px; text-align: right; font-weight: 600; }
+.unit-bar-track { width: 60px; height: 3px; background: rgba(255,255,255,0.08); border-radius: 2px; overflow: hidden; }
+.unit-bar-fill { height: 100%; border-radius: 2px; transition: width 0.2s; }
+.engine-info { font-size: 10px; color: rgba(255,255,255,0.2); letter-spacing: 1px; }
+</style>
+</head>
+<body>
+<canvas id="app-canvas"></canvas>
+<canvas id="bloom-canvas"></canvas>
+
+<div id="hud">
+    <div class="hud-panel">
+        <div class="team-label red-text">ATTACKERS</div>
+        <div class="count red-text" id="red-count">6</div>
+        <div class="status-line">RED ARMY</div>
+    </div>
+    <div class="hud-panel center">
+        <div id="timer">00:00</div>
+        <div class="status-line" id="status-text">BATTLE IN PROGRESS</div>
+    </div>
+    <div class="hud-panel right">
+        <div class="team-label blue-text">DEFENDERS</div>
+        <div class="count blue-text" id="blue-count">6</div>
+        <div class="status-line">BLUE ARMY</div>
+    </div>
+</div>
+
+<div id="winner-overlay">
+    <div id="winner-box">
+        <div id="winner-text"></div>
+        <div id="winner-sub"></div>
+        <button id="restart-btn" onclick="location.reload()">RESTART BATTLE</button>
+    </div>
+</div>
+
+<div id="bottom-hud">
+    <div class="engine-info">PlayCanvas Engine | Adversarial Simulation</div>
+    <div id="unit-bars"></div>
+</div>
+
+<script>
+(function() {
+'use strict';
+
+// ============================================================
+//  CONFIGURATION
+// ============================================================
+const CFG = {
+    UNIT_COUNT: 6,
+    TERRAIN_SIZE: 80,
+    UNIT_SPEED_RED: 4.2,
+    UNIT_SPEED_BLUE: 3.2,
+    PROJECTILE_SPEED: 32,
+    FIRE_RANGE: 20,
+    FIRE_RATE: 1.1,
+    PROJECTILE_DAMAGE: 16,
+    UNIT_HP: 120,
+    BASE_POS: null, // set after pc init
+    CAMERA_RADIUS: 52,
+    CAMERA_HEIGHT: 36,
+    CAMERA_SPEED: 0.1
+};
+const HALF = CFG.TERRAIN_SIZE / 2;
+
+// ============================================================
+//  APP INIT
+// ============================================================
+const canvas = document.getElementById('app-canvas');
+const app = new pc.Application(canvas, {
+    mouse: new pc.Mouse(canvas),
+    keyboard: new pc.Keyboard(window),
+    graphicsDeviceOptions: {
+        antialias: true,
+        alpha: false,
+        preferWebGl2: true,
+        powerPreference: 'high-performance'
+    }
+});
+app.setCanvasFillMode(pc.FILLMODE_FILL_WINDOW);
+app.setCanvasResolution(pc.RESOLUTION_AUTO);
+window.addEventListener('resize', () => app.resizeCanvas());
+
+CFG.BASE_POS = new pc.Vec3(28, 0, 0);
+
+// ============================================================
+//  RENDERING SETTINGS
+// ============================================================
+app.scene.ambientLight.set(0.06, 0.07, 0.12);
+
+// Fog (PlayCanvas 2.7+ API: fog is a FogParams object)
+try {
+    app.scene.fog.type = pc.FOG_LINEAR;
+    app.scene.fog.color.set(0.015, 0.02, 0.045);
+    app.scene.fog.start = 50;
+    app.scene.fog.end = 130;
+} catch(e) {
+    // Fallback for older API
+    try {
+        app.scene.fogColor = new pc.Color(0.015, 0.02, 0.045);
+        app.scene.fogStart = 50;
+        app.scene.fogEnd = 130;
+    } catch(e2) {}
+}
+
+// ============================================================
+//  BLOOM (post-process via offscreen canvas)
+// ============================================================
+const bloomCanvas = document.getElementById('bloom-canvas');
+const bloomCtx = bloomCanvas.getContext('2d');
+let bloomFrame = 0;
+
+function updateBloom() {
+    bloomFrame++;
+    if (bloomFrame % 3 !== 0) return; // update every 3 frames for perf
+    const w = Math.floor(window.innerWidth / 6);
+    const h = Math.floor(window.innerHeight / 6);
+    if (bloomCanvas.width !== w || bloomCanvas.height !== h) {
+        bloomCanvas.width = w;
+        bloomCanvas.height = h;
+    }
+    bloomCtx.clearRect(0, 0, w, h);
+    bloomCtx.filter = 'blur(8px) brightness(1.8)';
+    bloomCtx.drawImage(canvas, 0, 0, w, h);
+}
+
+// ============================================================
+//  MATERIAL FACTORY
+// ============================================================
+function mat(diffR, diffG, diffB, emR, emG, emB, metalness, gloss, opts) {
+    const m = new pc.StandardMaterial();
+    m.diffuse.set(diffR, diffG, diffB);
+    if (emR !== undefined && emR !== null) m.emissive.set(emR, emG, emB);
+    m.metalness = metalness || 0;
+    m.useMetalness = true;
+    m.gloss = gloss !== undefined ? gloss : 0.5;
+    if (opts) {
+        if (opts.blend) { m.blendType = pc.BLEND_ADDITIVE; m.opacity = opts.opacity || 1; m.depthWrite = false; }
+        if (opts.opacity !== undefined && !opts.blend) { m.blendType = pc.BLEND_NORMAL; m.opacity = opts.opacity; }
+    }
+    m.update();
+    return m;
+}
+
+// Pre-built materials
+const MATS = {
+    ground:     mat(0.11, 0.16, 0.07, 0, 0, 0, 0, 0.12),
+    groundDark: mat(0.07, 0.09, 0.05, 0, 0, 0, 0, 0.08),
+    ridge:      mat(0.09, 0.11, 0.06, 0.01, 0.015, 0.005, 0.1, 0.15),
+    gridLine:   mat(0.05, 0.09, 0.04, 0.02, 0.04, 0.015, 0, 0.1),
+    rock:       mat(0.13, 0.12, 0.11, 0, 0, 0, 0.2, 0.25),
+    base:       mat(0.12, 0.2, 0.5, 0.08, 0.15, 0.6, 0.5, 0.75),
+    baseDark:   mat(0.04, 0.04, 0.06, 0, 0, 0, 0.7, 0.3),
+    beacon:     mat(0.15, 0.35, 0.9, 0.4, 0.7, 2.0, 0, 0.9),
+    redUnit:    mat(0.7, 0.08, 0.06, 0.9, 0.12, 0.04, 0.25, 0.7),
+    blueUnit:   mat(0.06, 0.15, 0.75, 0.08, 0.2, 0.95, 0.25, 0.7),
+    redProj:    mat(1, 0.35, 0.08, 2.5, 0.7, 0.1, 0, 0.95),
+    blueProj:   mat(0.08, 0.35, 1, 0.15, 0.7, 3, 0, 0.95),
+    visorRed:   mat(0.95, 0.8, 0.6, 2.5, 1.2, 0.3, 0, 0.95),
+    visorBlue:  mat(0.6, 0.8, 0.95, 0.4, 1.0, 2.5, 0, 0.95),
+    white:      mat(0.9, 0.9, 0.9, 2, 2, 2, 0, 0.95),
+    hpGreen:    mat(0.1, 0.8, 0.2, 0.15, 0.9, 0.25, 0, 0.8),
+    hpYellow:   mat(0.9, 0.7, 0.1, 1.0, 0.8, 0.15, 0, 0.8),
+    hpRed:      mat(0.9, 0.1, 0.1, 1.0, 0.15, 0.1, 0, 0.8),
+    hpBg:       mat(0.06, 0.06, 0.06, 0, 0, 0, 0, 0.1),
+};
+
+// ============================================================
+//  SCENE: LIGHTING
+// ============================================================
+// Primary directional (moonlight)
+const dirLight = new pc.Entity('dirLight');
+dirLight.addComponent('light', {
+    type: 'directional',
+    color: new pc.Color(0.55, 0.52, 0.78),
+    intensity: 0.9,
+    castShadows: true,
+    shadowBias: 0.15,
+    normalOffsetBias: 0.05,
+    shadowResolution: 2048,
+    shadowDistance: 90,
+    shadowType: pc.SHADOW_PCF3
+});
+dirLight.setEulerAngles(48, -35, 0);
+app.root.addChild(dirLight);
+
+// Warm fill light from opposite side
+const fillLight = new pc.Entity('fillLight');
+fillLight.addComponent('light', {
+    type: 'directional',
+    color: new pc.Color(0.2, 0.12, 0.08),
+    intensity: 0.35,
+    castShadows: false
+});
+fillLight.setEulerAngles(-15, 160, 0);
+app.root.addChild(fillLight);
+
+// Rim light from above
+const rimLight = new pc.Entity('rimLight');
+rimLight.addComponent('light', {
+    type: 'directional',
+    color: new pc.Color(0.1, 0.1, 0.2),
+    intensity: 0.2,
+    castShadows: false
+});
+rimLight.setEulerAngles(85, 0, 0);
+app.root.addChild(rimLight);
+
+// ============================================================
+//  SCENE: CAMERA
+// ============================================================
+const camera = new pc.Entity('camera');
+camera.addComponent('camera', {
+    clearColor: new pc.Color(0.012, 0.015, 0.04),
+    fov: 48,
+    nearClip: 0.5,
+    farClip: 250
+});
+// Tone mapping & gamma on camera (PlayCanvas 2.7+)
+try {
+    camera.camera.gammaCorrection = pc.GAMMA_SRGB;
+    camera.camera.toneMapping = pc.TONEMAP_ACES;
+} catch(e) {
+    try {
+        app.scene.gammaCorrection = pc.GAMMA_SRGB;
+        app.scene.toneMapping = pc.TONEMAP_ACES;
+    } catch(e2) {}
+}
+app.root.addChild(camera);
+
+// ============================================================
+//  SCENE: SKY (geometry-based sky dome - reliable across versions)
+// ============================================================
+function createSkyDome() {
+    // Large inverted sphere for sky gradient effect
+    const skyDome = new pc.Entity('skyDome');
+    skyDome.addComponent('render', { type: 'sphere' });
+    const skyMat = new pc.StandardMaterial();
+    skyMat.diffuse.set(0.02, 0.025, 0.07);
+    skyMat.emissive.set(0.015, 0.02, 0.06);
+    skyMat.useLighting = false;
+    skyMat.cull = pc.CULLFACE_FRONT; // invert normals
+    skyMat.update();
+    skyDome.render.material = skyMat;
+    skyDome.setLocalScale(200, 120, 200);
+    skyDome.setPosition(0, 20, 0);
+    app.root.addChild(skyDome);
+
+    // Horizon glow band
+    const horizonRing = new pc.Entity('horizonGlow');
+    horizonRing.addComponent('render', { type: 'cylinder' });
+    const horizonMat = new pc.StandardMaterial();
+    horizonMat.diffuse.set(0.03, 0.02, 0.06);
+    horizonMat.emissive.set(0.04, 0.025, 0.08);
+    horizonMat.useLighting = false;
+    horizonMat.cull = pc.CULLFACE_FRONT;
+    horizonMat.blendType = pc.BLEND_ADDITIVE;
+    horizonMat.opacity = 0.3;
+    horizonMat.depthWrite = false;
+    horizonMat.update();
+    horizonRing.render.material = horizonMat;
+    horizonRing.setLocalScale(180, 2, 180);
+    horizonRing.setPosition(0, 3, 0);
+    app.root.addChild(horizonRing);
+
+    // Stars as small bright spheres scattered in the sky
+    for (let i = 0; i < 60; i++) {
+        const star = new pc.Entity();
+        star.addComponent('render', { type: 'sphere' });
+        const brightness = 0.5 + Math.random() * 0.5;
+        const starMat = new pc.StandardMaterial();
+        starMat.emissive.set(brightness, brightness, brightness * 1.1);
+        starMat.useLighting = false;
+        starMat.blendType = pc.BLEND_ADDITIVE;
+        starMat.opacity = 0.3 + Math.random() * 0.5;
+        starMat.depthWrite = false;
+        starMat.update();
+        star.render.material = starMat;
+        const sc = 0.05 + Math.random() * 0.12;
+        star.setLocalScale(sc, sc, sc);
+        // Random position on a hemisphere
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.random() * Math.PI * 0.4 + 0.1;
+        const r = 80 + Math.random() * 20;
+        star.setPosition(
+            Math.cos(theta) * Math.sin(phi) * r,
+            Math.cos(phi) * r + 10,
+            Math.sin(theta) * Math.sin(phi) * r
+        );
+        app.root.addChild(star);
+    }
+}
+createSkyDome();
+
+// ============================================================
+//  SCENE: TERRAIN
+// ============================================================
+function createTerrain() {
+    // Main ground
+    const ground = new pc.Entity('ground');
+    ground.addComponent('render', { type: 'box' });
+    ground.render.material = MATS.ground;
+    ground.setLocalScale(CFG.TERRAIN_SIZE, 0.4, CFG.TERRAIN_SIZE);
+    ground.setPosition(0, -0.2, 0);
+    app.root.addChild(ground);
+
+    // Dark earth patches
+    for (let i = 0; i < 25; i++) {
+        const patch = new pc.Entity();
+        patch.addComponent('render', { type: 'box' });
+        patch.render.material = MATS.groundDark;
+        const sx = 2 + Math.random() * 7;
+        const sz = 2 + Math.random() * 7;
+        patch.setLocalScale(sx, 0.12 + Math.random() * 0.2, sz);
+        patch.setPosition(
+            (Math.random() - 0.5) * CFG.TERRAIN_SIZE * 0.85,
+            0.02,
+            (Math.random() - 0.5) * CFG.TERRAIN_SIZE * 0.85
+        );
+        patch.setEulerAngles(0, Math.random() * 360, 0);
+        app.root.addChild(patch);
+    }
+
+    // Ridges / hills
+    const ridgeData = [
+        { x: -20, z: -12, sx: 14, sy: 2.2, sz: 8, ry: 20 },
+        { x: 12, z: 15, sx: 10, sy: 1.6, sz: 12, ry: -30 },
+        { x: -8, z: 20, sx: 16, sy: 1.8, sz: 6, ry: 10 },
+        { x: 24, z: -18, sx: 8, sy: 2.5, sz: 11, ry: 45 },
+        { x: -22, z: 10, sx: 7, sy: 1.3, sz: 9, ry: -15 },
+        { x: 5, z: -22, sx: 12, sy: 1.5, sz: 7, ry: 60 },
+        { x: -15, z: -25, sx: 9, sy: 1.4, sz: 6, ry: -40 },
+    ];
+    for (const r of ridgeData) {
+        const ridge = new pc.Entity();
+        ridge.addComponent('render', { type: 'sphere' });
+        ridge.render.material = MATS.ridge;
+        ridge.setLocalScale(r.sx, r.sy, r.sz);
+        ridge.setPosition(r.x, r.sy * 0.25, r.z);
+        ridge.setEulerAngles(0, r.ry, 0);
+        app.root.addChild(ridge);
+    }
+
+    // Grid lines (tactical overlay feel)
+    const spacing = 10;
+    for (let i = -HALF; i <= HALF; i += spacing) {
+        for (let axis = 0; axis < 2; axis++) {
+            const line = new pc.Entity();
+            line.addComponent('render', { type: 'box' });
+            line.render.material = MATS.gridLine;
+            if (axis === 0) {
+                line.setLocalScale(CFG.TERRAIN_SIZE, 0.06, 0.06);
+                line.setPosition(0, 0.03, i);
+            } else {
+                line.setLocalScale(0.06, 0.06, CFG.TERRAIN_SIZE);
+                line.setPosition(i, 0.03, 0);
+            }
+            app.root.addChild(line);
+        }
+    }
+
+    // Rocks / boulders
+    for (let i = 0; i < 30; i++) {
+        const rock = new pc.Entity();
+        const shapes = ['box', 'sphere'];
+        const shape = shapes[Math.floor(Math.random() * shapes.length)];
+        rock.addComponent('render', { type: shape });
+        rock.render.material = MATS.rock;
+        const sc = 0.3 + Math.random() * 1.5;
+        rock.setLocalScale(sc * (0.6 + Math.random() * 0.8), sc * (0.4 + Math.random() * 0.5), sc * (0.5 + Math.random() * 0.8));
+        rock.setPosition(
+            (Math.random() - 0.5) * CFG.TERRAIN_SIZE * 0.85,
+            sc * 0.15,
+            (Math.random() - 0.5) * CFG.TERRAIN_SIZE * 0.85
+        );
+        rock.setEulerAngles(Math.random() * 15, Math.random() * 360, Math.random() * 15);
+        app.root.addChild(rock);
+    }
+
+    // Edge fog walls (dark pillars at terrain edge for depth)
+    for (let i = 0; i < 20; i++) {
+        const wall = new pc.Entity();
+        wall.addComponent('render', { type: 'box' });
+        wall.render.material = mat(0.02, 0.02, 0.04, 0, 0, 0, 0, 0.05);
+        const side = Math.floor(i / 5);
+        const idx = i % 5;
+        const offset = -HALF + idx * (CFG.TERRAIN_SIZE / 4);
+        let wx = 0, wz = 0;
+        if (side === 0) { wx = offset; wz = -HALF; }
+        else if (side === 1) { wx = offset; wz = HALF; }
+        else if (side === 2) { wx = -HALF; wz = offset; }
+        else { wx = HALF; wz = offset; }
+        wall.setPosition(wx, 4, wz);
+        wall.setLocalScale(CFG.TERRAIN_SIZE / 4, 8, 1);
+        if (side >= 2) wall.setEulerAngles(0, 90, 0);
+        app.root.addChild(wall);
+    }
+}
+
+// ============================================================
+//  SCENE: BLUE BASE (tower/beacon)
+// ============================================================
+let baseBeacon, baseBeaconLight, baseRing, baseRingMat;
+
+function createBase() {
+    const base = new pc.Entity('base');
+    base.setPosition(CFG.BASE_POS.x, 0, CFG.BASE_POS.z);
+    app.root.addChild(base);
+
+    // Foundation platform
+    const platform = new pc.Entity();
+    platform.addComponent('render', { type: 'cylinder' });
+    platform.render.material = MATS.base;
+    platform.setLocalScale(11, 0.5, 11);
+    platform.setLocalPosition(0, 0.25, 0);
+    base.addChild(platform);
+
+    // Second smaller platform
+    const plat2 = new pc.Entity();
+    plat2.addComponent('render', { type: 'cylinder' });
+    plat2.render.material = MATS.baseDark;
+    plat2.setLocalScale(8, 0.3, 8);
+    plat2.setLocalPosition(0, 0.65, 0);
+    base.addChild(plat2);
+
+    // Tower pillar (central)
+    const tower = new pc.Entity();
+    tower.addComponent('render', { type: 'cylinder' });
+    tower.render.material = MATS.base;
+    tower.setLocalScale(2.5, 9, 2.5);
+    tower.setLocalPosition(0, 5.3, 0);
+    base.addChild(tower);
+
+    // Corner pillars
+    for (let i = 0; i < 6; i++) {
+        const angle = (i / 6) * Math.PI * 2;
+        const r = 4.2;
+        const pillar = new pc.Entity();
+        pillar.addComponent('render', { type: 'box' });
+        pillar.render.material = MATS.baseDark;
+        pillar.setLocalScale(0.45, 7, 0.45);
+        pillar.setLocalPosition(Math.cos(angle) * r, 4, Math.sin(angle) * r);
+        base.addChild(pillar);
+
+        // Small accent light on each pillar top
+        const accent = new pc.Entity();
+        accent.addComponent('render', { type: 'sphere' });
+        accent.render.material = MATS.beacon;
+        accent.setLocalScale(0.3, 0.3, 0.3);
+        accent.setLocalPosition(Math.cos(angle) * r, 7.6, Math.sin(angle) * r);
+        base.addChild(accent);
+    }
+
+    // Top crown
+    const crown = new pc.Entity();
+    crown.addComponent('render', { type: 'cylinder' });
+    crown.render.material = MATS.base;
+    crown.setLocalScale(7, 0.35, 7);
+    crown.setLocalPosition(0, 8.2, 0);
+    base.addChild(crown);
+
+    // Cross beams
+    for (let i = 0; i < 3; i++) {
+        const beam = new pc.Entity();
+        beam.addComponent('render', { type: 'box' });
+        beam.render.material = MATS.baseDark;
+        beam.setLocalScale(8, 0.2, 0.2);
+        beam.setLocalPosition(0, 5 + i * 1.5, 0);
+        beam.setLocalEulerAngles(0, i * 60, 0);
+        base.addChild(beam);
+    }
+
+    // Beacon sphere
+    baseBeacon = new pc.Entity('beacon');
+    baseBeacon.addComponent('render', { type: 'sphere' });
+    baseBeacon.render.material = MATS.beacon;
+    baseBeacon.setLocalScale(2, 2, 2);
+    baseBeacon.setLocalPosition(0, 10, 0);
+    base.addChild(baseBeacon);
+
+    // Beacon inner glow
+    const inner = new pc.Entity();
+    inner.addComponent('render', { type: 'sphere' });
+    inner.render.material = mat(1, 1, 1, 3, 3, 5, 0, 1);
+    inner.setLocalScale(0.8, 0.8, 0.8);
+    inner.setLocalPosition(0, 10, 0);
+    base.addChild(inner);
+
+    // Beacon point light
+    baseBeaconLight = new pc.Entity();
+    baseBeaconLight.addComponent('light', {
+        type: 'point',
+        color: new pc.Color(0.25, 0.45, 1),
+        intensity: 4,
+        range: 30,
+        castShadows: false
+    });
+    baseBeaconLight.setLocalPosition(0, 10.5, 0);
+    base.addChild(baseBeaconLight);
+
+    // Ring around tower mid-section
+    baseRingMat = mat(0.1, 0.3, 0.8, 0.2, 0.5, 1.5, 0, 0.8, { blend: true, opacity: 0.5 });
+    baseRing = new pc.Entity();
+    baseRing.addComponent('render', { type: 'cylinder' });
+    baseRing.render.material = baseRingMat;
+    baseRing.setLocalScale(5, 0.08, 5);
+    baseRing.setLocalPosition(0, 9, 0);
+    base.addChild(baseRing);
+
+    // Ground glow ring
+    const groundGlow = new pc.Entity();
+    groundGlow.addComponent('render', { type: 'cylinder' });
+    const ggMat = mat(0.05, 0.15, 0.5, 0.1, 0.25, 0.8, 0, 0.5, { blend: true, opacity: 0.25 });
+    groundGlow.render.material = ggMat;
+    groundGlow.setLocalScale(14, 0.04, 14);
+    groundGlow.setLocalPosition(0, 0.02, 0);
+    base.addChild(groundGlow);
+}
+
+// ============================================================
+//  UNITS
+// ============================================================
+const units = [];
+const projectiles = [];
+const explosions = [];
+const trails = [];
+
+function createUnit(team, index) {
+    const isRed = team === 'red';
+    const entity = new pc.Entity('unit_' + team + '_' + index);
+
+    // === Body geometry ===
+    // Torso cylinder
+    const torso = new pc.Entity('torso');
+    torso.addComponent('render', { type: 'cylinder' });
+    torso.render.material = isRed ? MATS.redUnit : MATS.blueUnit;
+    torso.setLocalScale(0.9, 1.4, 0.9);
+    torso.setLocalPosition(0, 0.7, 0);
+    entity.addChild(torso);
+
+    // Head sphere
+    const head = new pc.Entity('head');
+    head.addComponent('render', { type: 'sphere' });
+    head.render.material = isRed ? MATS.redUnit : MATS.blueUnit;
+    head.setLocalScale(0.85, 0.7, 0.85);
+    head.setLocalPosition(0, 1.65, 0);
+    entity.addChild(head);
+
+    // Feet base
+    const feet = new pc.Entity('feet');
+    feet.addComponent('render', { type: 'sphere' });
+    feet.render.material = isRed ? MATS.redUnit : MATS.blueUnit;
+    feet.setLocalScale(0.95, 0.5, 0.95);
+    feet.setLocalPosition(0, 0.05, 0);
+    entity.addChild(feet);
+
+    // Visor (eye)
+    const visor = new pc.Entity('visor');
+    visor.addComponent('render', { type: 'sphere' });
+    visor.render.material = isRed ? MATS.visorRed : MATS.visorBlue;
+    visor.setLocalScale(0.3, 0.14, 0.12);
+    visor.setLocalPosition(0, 1.55, 0.38);
+    entity.addChild(visor);
+
+    // Shoulder pads
+    for (const side of [-1, 1]) {
+        const pad = new pc.Entity();
+        pad.addComponent('render', { type: 'sphere' });
+        pad.render.material = isRed ? MATS.redUnit : MATS.blueUnit;
+        pad.setLocalScale(0.3, 0.22, 0.25);
+        pad.setLocalPosition(side * 0.48, 1.35, 0);
+        entity.addChild(pad);
+    }
+
+    // Weapon (small bar extending forward)
+    const weapon = new pc.Entity('weapon');
+    weapon.addComponent('render', { type: 'box' });
+    weapon.render.material = mat(0.15, 0.15, 0.15, 0, 0, 0, 0.8, 0.4);
+    weapon.setLocalScale(0.08, 0.08, 0.6);
+    weapon.setLocalPosition(0.25, 1.0, 0.3);
+    entity.addChild(weapon);
+
+    // Muzzle glow
+    const muzzle = new pc.Entity('muzzle');
+    muzzle.addComponent('render', { type: 'sphere' });
+    muzzle.render.material = isRed ? MATS.visorRed : MATS.visorBlue;
+    muzzle.setLocalScale(0.06, 0.06, 0.06);
+    muzzle.setLocalPosition(0.25, 1.0, 0.6);
+    entity.addChild(muzzle);
+
+    // Point light (per unit)
+    const unitLight = new pc.Entity('ulight');
+    unitLight.addComponent('light', {
+        type: 'point',
+        color: isRed ? new pc.Color(1, 0.2, 0.05) : new pc.Color(0.08, 0.25, 1),
+        intensity: 1.2,
+        range: 10,
+        castShadows: true,
+        shadowResolution: 256,
+        shadowBias: 0.3
+    });
+    unitLight.setLocalPosition(0, 2.2, 0);
+    entity.addChild(unitLight);
+
+    // HP bar background
+    const hpBg = new pc.Entity('hp_bg');
+    hpBg.addComponent('render', { type: 'box' });
+    hpBg.render.material = MATS.hpBg;
+    hpBg.setLocalScale(1.3, 0.1, 0.1);
+    hpBg.setLocalPosition(0, 2.4, 0);
+    entity.addChild(hpBg);
+
+    // HP bar fill
+    const hpBar = new pc.Entity('hp_bar');
+    hpBar.addComponent('render', { type: 'box' });
+    hpBar.render.material = MATS.hpGreen;
+    hpBar.setLocalScale(1.25, 0.08, 0.12);
+    hpBar.setLocalPosition(0, 2.4, 0);
+    entity.addChild(hpBar);
+
+    // Spawn position
+    let spawnX, spawnZ;
+    if (isRed) {
+        spawnX = -HALF + 4 + Math.random() * 6;
+        spawnZ = (index - (CFG.UNIT_COUNT - 1) / 2) * 7 + (Math.random() - 0.5) * 2;
+    } else {
+        const angle = (index / CFG.UNIT_COUNT) * Math.PI * 1.2 - Math.PI * 0.6;
+        spawnX = CFG.BASE_POS.x + Math.cos(angle) * (6 + Math.random() * 4);
+        spawnZ = CFG.BASE_POS.z + Math.sin(angle) * (6 + Math.random() * 4);
+    }
+    entity.setPosition(spawnX, 0, spawnZ);
+    app.root.addChild(entity);
+
+    const unit = {
+        entity, team, index,
+        torso, head, feet, visor, weapon, muzzle,
+        light: unitLight,
+        hpBar,
+        hp: CFG.UNIT_HP,
+        maxHp: CFG.UNIT_HP,
+        alive: true,
+        fireCooldown: Math.random() * CFG.FIRE_RATE,
+        target: null,
+        trailTimer: 0,
+        muzzleFlash: 0 // timer for muzzle glow
+    };
+    units.push(unit);
+    return unit;
+}
+
+// ============================================================
+//  PROJECTILES
+// ============================================================
+function fireProjectile(shooter, target) {
+    const isRed = shooter.team === 'red';
+    const entity = new pc.Entity('proj');
+    entity.addComponent('render', { type: 'sphere' });
+    entity.render.material = isRed ? MATS.redProj : MATS.blueProj;
+    entity.setLocalScale(0.22, 0.22, 0.22);
+
+    const startPos = shooter.entity.getPosition().clone();
+    startPos.y += 1.0;
+    // Offset toward muzzle direction
+    const fwd = shooter.entity.forward.clone().mulScalar(-0.6);
+    startPos.add(fwd);
+    entity.setPosition(startPos);
+
+    // Projectile light
+    const pLight = new pc.Entity();
+    pLight.addComponent('light', {
+        type: 'point',
+        color: isRed ? new pc.Color(1, 0.45, 0.1) : new pc.Color(0.15, 0.4, 1),
+        intensity: 2.5,
+        range: 7,
+        castShadows: false
+    });
+    entity.addChild(pLight);
+
+    // Trail core (elongated sphere for motion blur feel)
+    const trail = new pc.Entity();
+    trail.addComponent('render', { type: 'sphere' });
+    const trailMat = mat(
+        isRed ? 1 : 0.1, isRed ? 0.5 : 0.4, isRed ? 0.15 : 1,
+        isRed ? 1.5 : 0.2, isRed ? 0.4 : 0.6, isRed ? 0.1 : 2,
+        0, 0.9, { blend: true, opacity: 0.5 }
+    );
+    trail.render.material = trailMat;
+    trail.setLocalScale(0.12, 0.12, 0.5);
+    entity.addChild(trail);
+
+    app.root.addChild(entity);
+
+    const targetPos = target.entity.getPosition().clone();
+    targetPos.y += 0.8 + Math.random() * 0.4;
+    const dir = new pc.Vec3().sub2(targetPos, startPos).normalize();
+
+    // Muzzle flash on shooter
+    shooter.muzzleFlash = 0.12;
+
+    projectiles.push({
+        entity, dir, speed: CFG.PROJECTILE_SPEED + Math.random() * 4,
+        team: shooter.team, damage: CFG.PROJECTILE_DAMAGE + Math.random() * 4,
+        life: 2.5, age: 0
+    });
+}
+
+// ============================================================
+//  EXPLOSIONS
+// ============================================================
+function createExplosion(pos, team) {
+    const isRed = team === 'red';
+    const debris = [];
+    const count = 18;
+
+    for (let i = 0; i < count; i++) {
+        const d = new pc.Entity();
+        d.addComponent('render', { type: i < 6 ? 'sphere' : 'box' });
+        const cr = isRed ? (0.8 + Math.random() * 0.2) : (0.1 + Math.random() * 0.1);
+        const cg = isRed ? (0.2 + Math.random() * 0.3) : (0.2 + Math.random() * 0.3);
+        const cb = isRed ? (0.05 + Math.random() * 0.1) : (0.7 + Math.random() * 0.3);
+        const dMat = mat(cr, cg, cb, cr * 2, cg * 1.5, cb * 2, 0, 0.8, { blend: true, opacity: 1 });
+        d.render.material = dMat;
+        const sc = 0.12 + Math.random() * 0.35;
+        d.setLocalScale(sc, sc, sc);
+        d.setPosition(pos.x, pos.y + 0.8, pos.z);
+        app.root.addChild(d);
+
+        debris.push({
+            entity: d,
+            mat: dMat,
+            vel: new pc.Vec3(
+                (Math.random() - 0.5) * 14,
+                4 + Math.random() * 10,
+                (Math.random() - 0.5) * 14
+            ),
+            rotVel: new pc.Vec3(
+                (Math.random() - 0.5) * 600,
+                (Math.random() - 0.5) * 600,
+                (Math.random() - 0.5) * 600
+            )
+        });
+    }
+
+    // Shockwave ring
+    const ring = new pc.Entity();
+    ring.addComponent('render', { type: 'cylinder' });
+    const ringMat = mat(
+        isRed ? 1 : 0.2, isRed ? 0.4 : 0.4, isRed ? 0.1 : 1,
+        isRed ? 1.5 : 0.3, isRed ? 0.5 : 0.6, isRed ? 0.1 : 2,
+        0, 0.8, { blend: true, opacity: 0.6 }
+    );
+    ring.render.material = ringMat;
+    ring.setLocalScale(0.5, 0.03, 0.5);
+    ring.setPosition(pos.x, 0.1, pos.z);
+    app.root.addChild(ring);
+
+    // Core flash sphere
+    const core = new pc.Entity();
+    core.addComponent('render', { type: 'sphere' });
+    const coreMat = mat(1, 0.9, 0.6, 4, 3, 1.5, 0, 1, { blend: true, opacity: 0.9 });
+    core.render.material = coreMat;
+    core.setLocalScale(1, 1, 1);
+    core.setPosition(pos.x, pos.y + 1, pos.z);
+    app.root.addChild(core);
+
+    // Flash light
+    const flash = new pc.Entity();
+    flash.addComponent('light', {
+        type: 'point',
+        color: isRed ? new pc.Color(1, 0.5, 0.15) : new pc.Color(0.2, 0.45, 1),
+        intensity: 10,
+        range: 22,
+        castShadows: false
+    });
+    flash.setPosition(pos.x, pos.y + 2, pos.z);
+    app.root.addChild(flash);
+
+    explosions.push({
+        debris, ring, ringMat, core, coreMat, flash,
+        age: 0, maxAge: 1.4
+    });
+}
+
+// ============================================================
+//  TRAIL PARTICLES
+// ============================================================
+function spawnTrail(pos, team) {
+    const isRed = team === 'red';
+    const t = new pc.Entity();
+    t.addComponent('render', { type: 'sphere' });
+    const tMat = mat(
+        isRed ? 0.6 : 0.05, isRed ? 0.1 : 0.15, isRed ? 0.03 : 0.5,
+        isRed ? 0.5 : 0.04, isRed ? 0.08 : 0.1, isRed ? 0.02 : 0.4,
+        0, 0.5, { blend: true, opacity: 0.4 }
+    );
+    t.render.material = tMat;
+    const sc = 0.15 + Math.random() * 0.08;
+    t.setLocalScale(sc, sc * 0.4, sc);
+    t.setPosition(
+        pos.x + (Math.random() - 0.5) * 0.4,
+        0.08,
+        pos.z + (Math.random() - 0.5) * 0.4
+    );
+    app.root.addChild(t);
+    trails.push({ entity: t, mat: tMat, life: 1.5, age: 0 });
+}
+
+// ============================================================
+//  AMBIENT FLOATING PARTICLES
+// ============================================================
+const ambientP = [];
+function createAmbientParticles() {
+    for (let i = 0; i < 50; i++) {
+        const p = new pc.Entity();
+        p.addComponent('render', { type: 'sphere' });
+        const brightness = 0.3 + Math.random() * 0.5;
+        const pMat = mat(
+            0.15 * brightness, 0.18 * brightness, 0.35 * brightness,
+            0.08 * brightness, 0.1 * brightness, 0.2 * brightness,
+            0, 0.5, { blend: true, opacity: 0.12 + Math.random() * 0.15 }
+        );
+        p.render.material = pMat;
+        const sc = 0.04 + Math.random() * 0.1;
+        p.setLocalScale(sc, sc, sc);
+        const x = (Math.random() - 0.5) * CFG.TERRAIN_SIZE;
+        const y = 0.5 + Math.random() * 14;
+        const z = (Math.random() - 0.5) * CFG.TERRAIN_SIZE;
+        p.setPosition(x, y, z);
+        app.root.addChild(p);
+        ambientP.push({
+            entity: p,
+            baseY: y,
+            speed: 0.2 + Math.random() * 0.6,
+            phase: Math.random() * Math.PI * 2,
+            driftX: (Math.random() - 0.5) * 0.4,
+            driftZ: (Math.random() - 0.5) * 0.4,
+            amp: 0.5 + Math.random() * 2
+        });
+    }
+}
+
+// ============================================================
+//  GAME STATE
+// ============================================================
+let gameTime = 0;
+let gameOver = false;
+
+// ============================================================
+//  AI
+// ============================================================
+function findClosestEnemy(unit) {
+    let closest = null, minDist = Infinity;
+    const pos = unit.entity.getPosition();
+    for (const other of units) {
+        if (other.team === unit.team || !other.alive) continue;
+        const d = pos.distance(other.entity.getPosition());
+        if (d < minDist) { minDist = d; closest = other; }
+    }
+    return { target: closest, dist: minDist };
+}
+
+function updateAI(dt) {
+    for (const unit of units) {
+        if (!unit.alive) continue;
+
+        const { target, dist } = findClosestEnemy(unit);
+        unit.target = target;
+        const pos = unit.entity.getPosition();
+        let moveDir = new pc.Vec3();
+
+        if (unit.team === 'red') {
+            if (target && dist < CFG.FIRE_RANGE * 1.5) {
+                const tPos = target.entity.getPosition();
+                moveDir.sub2(tPos, pos).normalize();
+                // Don't rush too close
+                if (dist < 5) {
+                    // Strafe
+                    const strf = new pc.Vec3(-moveDir.z, 0, moveDir.x);
+                    moveDir.add(strf.mulScalar(0.6)).normalize();
+                }
+            } else {
+                moveDir.sub2(CFG.BASE_POS, pos).normalize();
+            }
+        } else {
+            if (target && dist < CFG.FIRE_RANGE * 2) {
+                const tPos = target.entity.getPosition();
+                moveDir.sub2(tPos, pos).normalize();
+                if (dist < 5) {
+                    const strf = new pc.Vec3(moveDir.z, 0, -moveDir.x);
+                    moveDir.add(strf.mulScalar(0.5)).normalize();
+                }
+            } else {
+                const toBase = new pc.Vec3().sub2(CFG.BASE_POS, pos);
+                const baseDist = toBase.length();
+                if (baseDist > 14) {
+                    moveDir.copy(toBase).normalize();
+                } else {
+                    const a = gameTime * 0.4 + unit.index * 1.2;
+                    moveDir.set(Math.cos(a) * 0.3, 0, Math.sin(a) * 0.3);
+                }
+            }
+        }
+
+        // Apply movement
+        moveDir.y = 0;
+        const speed = unit.team === 'red' ? CFG.UNIT_SPEED_RED : CFG.UNIT_SPEED_BLUE;
+        const newX = pos.x + moveDir.x * speed * dt;
+        const newZ = pos.z + moveDir.z * speed * dt;
+
+        const clampedX = Math.max(-HALF + 1, Math.min(HALF - 1, newX));
+        const clampedZ = Math.max(-HALF + 1, Math.min(HALF - 1, newZ));
+        unit.entity.setPosition(clampedX, 0, clampedZ);
+
+        // Face direction
+        if (moveDir.lengthSq() > 0.001) {
+            const angle = Math.atan2(moveDir.x, moveDir.z) * (180 / Math.PI);
+            unit.entity.setEulerAngles(0, angle, 0);
+        }
+
+        // Firing
+        if (target && dist <= CFG.FIRE_RANGE) {
+            unit.fireCooldown -= dt;
+            if (unit.fireCooldown <= 0) {
+                fireProjectile(unit, target);
+                unit.fireCooldown = CFG.FIRE_RATE + (Math.random() - 0.5) * 0.25;
+            }
+        }
+
+        // Bob animation
+        const bob = Math.sin(gameTime * 5.5 + unit.index * 2.3) * 0.07;
+        unit.torso.setLocalPosition(0, 0.7 + bob, 0);
+        unit.head.setLocalPosition(0, 1.65 + bob * 1.2, 0);
+        unit.feet.setLocalPosition(0, 0.05 + bob * 0.3, 0);
+
+        // Trail
+        unit.trailTimer -= dt;
+        if (unit.trailTimer <= 0 && moveDir.lengthSq() > 0.01) {
+            spawnTrail(unit.entity.getPosition(), unit.team);
+            unit.trailTimer = 0.07;
+        }
+
+        // Muzzle flash fade
+        if (unit.muzzleFlash > 0) {
+            unit.muzzleFlash -= dt;
+            const msc = 0.06 + unit.muzzleFlash * 2;
+            unit.muzzle.setLocalScale(msc, msc, msc);
+        } else {
+            unit.muzzle.setLocalScale(0.04, 0.04, 0.04);
+        }
+
+        // HP bar
+        const hpFrac = Math.max(0, unit.hp / unit.maxHp);
+        unit.hpBar.setLocalScale(1.25 * hpFrac, 0.08, 0.12);
+        unit.hpBar.setLocalPosition(-1.25 * (1 - hpFrac) * 0.5 * 0.5, 2.4, 0);
+
+        // HP color
+        if (hpFrac < 0.3) {
+            unit.hpBar.render.material = MATS.hpRed;
+        } else if (hpFrac < 0.55) {
+            unit.hpBar.render.material = MATS.hpYellow;
+        }
+
+        // Light intensity flicker
+        const flicker = 1.0 + Math.sin(gameTime * 8 + unit.index * 3.7) * 0.25;
+        unit.light.light.intensity = flicker;
+    }
+}
+
+// ============================================================
+//  UPDATE: PROJECTILES
+// ============================================================
+function updateProjectiles(dt) {
+    for (let i = projectiles.length - 1; i >= 0; i--) {
+        const p = projectiles[i];
+        p.life -= dt;
+        p.age += dt;
+        if (p.life <= 0) { p.entity.destroy(); projectiles.splice(i, 1); continue; }
+
+        const pos = p.entity.getPosition();
+        pos.x += p.dir.x * p.speed * dt;
+        pos.y += p.dir.y * p.speed * dt;
+        pos.z += p.dir.z * p.speed * dt;
+        p.entity.setPosition(pos);
+
+        // Spin
+        const a = p.entity.getEulerAngles();
+        p.entity.setEulerAngles(a.x + 600 * dt, a.y + 400 * dt, a.z);
+
+        // Collision
+        let hit = false;
+        for (const unit of units) {
+            if (!unit.alive || unit.team === p.team) continue;
+            const uPos = unit.entity.getPosition();
+            const dx = pos.x - uPos.x, dy = pos.y - (uPos.y + 0.9), dz = pos.z - uPos.z;
+            if (dx * dx + dy * dy + dz * dz < 1.6) {
+                unit.hp -= p.damage;
+                if (unit.hp <= 0) {
+                    unit.alive = false;
+                    createExplosion(uPos, unit.team);
+                    unit.entity.destroy();
+                }
+                hit = true;
+                break;
+            }
+        }
+
+        if (pos.y < -0.5) hit = true;
+        if (hit) { p.entity.destroy(); projectiles.splice(i, 1); }
+    }
+}
+
+// ============================================================
+//  UPDATE: EXPLOSIONS
+// ============================================================
+function updateExplosions(dt) {
+    for (let i = explosions.length - 1; i >= 0; i--) {
+        const exp = explosions[i];
+        exp.age += dt;
+        const t = exp.age / exp.maxAge;
+
+        if (exp.age >= exp.maxAge) {
+            for (const d of exp.debris) d.entity.destroy();
+            exp.ring.destroy();
+            exp.core.destroy();
+            exp.flash.destroy();
+            explosions.splice(i, 1);
+            continue;
+        }
+
+        // Flash intensity
+        exp.flash.light.intensity = 10 * Math.max(0, 1 - t * 2);
+
+        // Core shrinks after initial expansion
+        const coreScale = t < 0.15 ? (t / 0.15) * 3 : 3 * (1 - (t - 0.15) / 0.85);
+        exp.core.setLocalScale(coreScale, coreScale, coreScale);
+        exp.coreMat.opacity = Math.max(0, 1 - t * 1.5);
+        exp.coreMat.update();
+
+        // Ring expands
+        const ringScale = 0.5 + t * 14;
+        exp.ring.setLocalScale(ringScale, 0.03 * (1 - t), ringScale);
+        exp.ringMat.opacity = 0.6 * Math.max(0, 1 - t * 1.2);
+        exp.ringMat.update();
+
+        // Debris physics
+        for (const d of exp.debris) {
+            d.vel.y -= 18 * dt;
+            const dp = d.entity.getPosition();
+            dp.x += d.vel.x * dt;
+            dp.y += d.vel.y * dt;
+            dp.z += d.vel.z * dt;
+            if (dp.y < 0.05) { dp.y = 0.05; d.vel.y *= -0.25; d.vel.x *= 0.7; d.vel.z *= 0.7; }
+            d.entity.setPosition(dp);
+
+            const ea = d.entity.getEulerAngles();
+            d.entity.setEulerAngles(
+                ea.x + d.rotVel.x * dt,
+                ea.y + d.rotVel.y * dt,
+                ea.z + d.rotVel.z * dt
+            );
+
+            const sc = 0.3 * Math.max(0, 1 - t * 0.8);
+            d.entity.setLocalScale(sc, sc, sc);
+            d.mat.opacity = Math.max(0, 1 - t);
+            d.mat.update();
+        }
+    }
+}
+
+// ============================================================
+//  UPDATE: TRAILS
+// ============================================================
+function updateTrails(dt) {
+    for (let i = trails.length - 1; i >= 0; i--) {
+        const t = trails[i];
+        t.age += dt;
+        if (t.age >= t.life) { t.entity.destroy(); trails.splice(i, 1); continue; }
+        const frac = t.age / t.life;
+        const sc = 0.15 * (1 - frac);
+        t.entity.setLocalScale(sc, sc * 0.4, sc);
+        t.mat.opacity = 0.4 * (1 - frac);
+        t.mat.update();
+    }
+}
+
+// ============================================================
+//  UPDATE: AMBIENT PARTICLES
+// ============================================================
+function updateAmbient(dt) {
+    for (const p of ambientP) {
+        const pos = p.entity.getPosition();
+        pos.y = p.baseY + Math.sin(gameTime * p.speed + p.phase) * p.amp;
+        pos.x += p.driftX * dt;
+        pos.z += p.driftZ * dt;
+        if (pos.x > HALF) pos.x = -HALF;
+        if (pos.x < -HALF) pos.x = HALF;
+        if (pos.z > HALF) pos.z = -HALF;
+        if (pos.z < -HALF) pos.z = HALF;
+        p.entity.setPosition(pos);
+    }
+}
+
+// ============================================================
+//  UPDATE: CAMERA (slow orbit)
+// ============================================================
+let camAngle = 0;
+function updateCamera(dt) {
+    camAngle += dt * CFG.CAMERA_SPEED;
+    const lookX = CFG.BASE_POS.x * 0.3;
+    const r = CFG.CAMERA_RADIUS + Math.sin(gameTime * 0.06) * 6;
+    const h = CFG.CAMERA_HEIGHT + Math.sin(gameTime * 0.08) * 4;
+    const cx = lookX + Math.cos(camAngle) * r;
+    const cz = Math.sin(camAngle) * r;
+    camera.setPosition(cx, h, cz);
+    camera.lookAt(new pc.Vec3(lookX, 1.5, 0));
+}
+
+// ============================================================
+//  UPDATE: BASE BEACON
+// ============================================================
+function updateBase(dt) {
+    if (!baseBeacon) return;
+    const pulse = 1 + Math.sin(gameTime * 2.5) * 0.3;
+    baseBeacon.setLocalScale(2 * pulse, 2 * pulse, 2 * pulse);
+    baseBeaconLight.light.intensity = 3 + Math.sin(gameTime * 2.5) * 1.5;
+
+    // Ring rotation and pulse
+    const ra = baseRing.getEulerAngles();
+    baseRing.setEulerAngles(0, ra.y + 30 * dt, 0);
+    const ringPulse = 5 + Math.sin(gameTime * 1.5) * 0.8;
+    baseRing.setLocalScale(ringPulse, 0.08, ringPulse);
+    baseRingMat.opacity = 0.3 + Math.sin(gameTime * 2) * 0.15;
+    baseRingMat.update();
+}
+
+// ============================================================
+//  HUD
+// ============================================================
+function updateHUD() {
+    const mins = Math.floor(gameTime / 60).toString().padStart(2, '0');
+    const secs = Math.floor(gameTime % 60).toString().padStart(2, '0');
+    document.getElementById('timer').textContent = mins + ':' + secs;
+
+    const redAlive = units.filter(u => u.team === 'red' && u.alive).length;
+    const blueAlive = units.filter(u => u.team === 'blue' && u.alive).length;
+    document.getElementById('red-count').textContent = redAlive;
+    document.getElementById('blue-count').textContent = blueAlive;
+
+    // Status text
+    const statusEl = document.getElementById('status-text');
+    if (!gameOver) {
+        const totalProj = projectiles.length;
+        statusEl.textContent = `ENGAGED | ${totalProj} PROJECTILE${totalProj !== 1 ? 'S' : ''} ACTIVE`;
+    }
+
+    // Unit HP bars in bottom HUD
+    const barsEl = document.getElementById('unit-bars');
+    let html = '<div class="bar-group"><div class="bar-group-title">Unit HP</div>';
+    for (const u of units) {
+        if (!u.alive) continue;
+        const pct = Math.max(0, (u.hp / u.maxHp) * 100);
+        const color = u.team === 'red' ? '#e44' : '#48f';
+        const label = (u.team === 'red' ? 'R' : 'B') + (u.index + 1);
+        html += `<div class="unit-bar">
+            <span class="unit-bar-label" style="color:${color}">${label}</span>
+            <div class="unit-bar-track"><div class="unit-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+        </div>`;
+    }
+    html += '</div>';
+    barsEl.innerHTML = html;
+
+    // Win condition
+    if (!gameOver && (redAlive === 0 || blueAlive === 0)) {
+        gameOver = true;
+        statusEl.textContent = 'BATTLE CONCLUDED';
+        setTimeout(() => {
+            const overlay = document.getElementById('winner-overlay');
+            overlay.style.display = 'flex';
+            const wt = document.getElementById('winner-text');
+            const ws = document.getElementById('winner-sub');
+            if (redAlive === 0 && blueAlive === 0) {
+                wt.textContent = 'MUTUAL DESTRUCTION';
+                wt.style.color = '#aaa';
+                ws.textContent = 'Both armies have been eliminated.';
+            } else if (blueAlive > 0) {
+                wt.textContent = 'BLUE VICTORY';
+                wt.style.color = '#4488ff';
+                wt.style.textShadow = '0 0 30px rgba(68,136,255,0.6)';
+                ws.textContent = `The base stands defended. ${blueAlive} defender${blueAlive > 1 ? 's' : ''} survived.`;
+            } else {
+                wt.textContent = 'RED VICTORY';
+                wt.style.color = '#ff4444';
+                wt.style.textShadow = '0 0 30px rgba(255,68,68,0.6)';
+                ws.textContent = `The base has fallen. ${redAlive} attacker${redAlive > 1 ? 's' : ''} remain.`;
+            }
+        }, 1500);
+    }
+}
+
+// ============================================================
+//  INITIALIZATION
+// ============================================================
+createTerrain();
+createBase();
+createAmbientParticles();
+
+for (let i = 0; i < CFG.UNIT_COUNT; i++) {
+    createUnit('red', i);
+    createUnit('blue', i);
+}
+
+// ============================================================
+//  MAIN LOOP
+// ============================================================
+app.on('update', function(dt) {
+    dt = Math.min(dt, 0.05);
+
+    if (!gameOver) {
+        gameTime += dt;
+        updateAI(dt);
+    }
+
+    updateProjectiles(dt);
+    updateExplosions(dt);
+    updateTrails(dt);
+    updateAmbient(dt);
+    updateCamera(dt);
+    updateBase(dt);
+    updateHUD();
+    updateBloom();
+});
+
+app.start();
+
+})();
+</script>
+</body>
+</html>

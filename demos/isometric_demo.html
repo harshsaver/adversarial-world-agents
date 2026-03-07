@@ -1,0 +1,1347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Isometric Adversarial Simulation</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#1a1a2e; overflow:hidden; font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif; }
+canvas { display:block; cursor:crosshair; }
+#ui-overlay {
+  position:absolute; top:0; left:0; width:100%; pointer-events:none;
+}
+#hud {
+  pointer-events:auto;
+  margin:8px auto; width:700px; height:64px;
+  background: linear-gradient(180deg, #d4a857 0%, #c49a45 40%, #b8893a 100%);
+  border:3px solid #8b6914; border-radius:8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,200,0.4);
+  display:flex; align-items:center; justify-content:space-between;
+  padding:0 20px; color:#3a2000;
+  font-weight:bold; font-size:14px;
+  position:relative;
+}
+#hud::before {
+  content:''; position:absolute; top:3px; left:3px; right:3px; bottom:50%;
+  background: linear-gradient(180deg, rgba(255,255,200,0.25) 0%, transparent 100%);
+  border-radius:5px 5px 0 0; pointer-events:none;
+}
+.hud-section { display:flex; align-items:center; gap:8px; z-index:1; }
+.hud-icon { width:28px; height:28px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:bold; color:#fff; }
+.red-icon { background: radial-gradient(circle, #ff4444, #aa0000); border:2px solid #880000; }
+.blue-icon { background: radial-gradient(circle, #4488ff, #0044aa); border:2px solid #003388; }
+.hud-label { font-size:13px; text-shadow: 0 1px 0 rgba(255,255,200,0.3); }
+.hud-val { font-size:18px; color:#2a1000; }
+#timer-display { font-size:20px; color:#2a1000; text-align:center; text-shadow: 0 1px 0 rgba(255,255,200,0.3); }
+#status-bar {
+  pointer-events:auto;
+  position:absolute; bottom:8px; left:50%; transform:translateX(-50%);
+  background: rgba(0,0,0,0.7); color:#ccc; padding:6px 18px;
+  border-radius:20px; font-size:12px; border:1px solid #555;
+}
+#winner-banner {
+  display:none; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+  pointer-events:auto; text-align:center;
+}
+.scroll-bg {
+  background: linear-gradient(180deg, #e8d5a3 0%, #d4b87a 20%, #c9a96a 50%, #d4b87a 80%, #e8d5a3 100%);
+  border:4px solid #8b6914; border-radius:12px; padding:40px 60px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6), inset 0 2px 0 rgba(255,255,200,0.3);
+  position:relative;
+}
+.scroll-bg::before, .scroll-bg::after {
+  content:''; position:absolute; left:10px; right:10px; height:20px;
+  background: linear-gradient(180deg, rgba(139,105,20,0.3), transparent);
+  border-radius:50%;
+}
+.scroll-bg::before { top:-8px; }
+.scroll-bg::after { bottom:-8px; transform:scaleY(-1); }
+.winner-title { font-size:36px; color:#3a2000; font-weight:bold; text-shadow:0 2px 4px rgba(0,0,0,0.2); margin-bottom:8px; }
+.winner-sub { font-size:16px; color:#5a4020; }
+#restart-btn {
+  margin-top:16px; padding:10px 30px; font-size:16px; font-weight:bold;
+  background: linear-gradient(180deg,#d4a857,#b8893a); border:2px solid #8b6914;
+  border-radius:6px; color:#3a2000; cursor:pointer;
+  box-shadow:0 2px 6px rgba(0,0,0,0.3);
+}
+#restart-btn:hover { background: linear-gradient(180deg,#e0b868,#c49a45); }
+</style>
+</head>
+<body>
+<canvas id="gc"></canvas>
+<div id="ui-overlay">
+  <div id="hud">
+    <div class="hud-section">
+      <div class="hud-icon red-icon">R</div>
+      <div><div class="hud-label">Red Invaders</div><div class="hud-val" id="red-count">10</div></div>
+    </div>
+    <div id="timer-display">00:00</div>
+    <div class="hud-section">
+      <div><div class="hud-label">Blue Defenders</div><div class="hud-val" id="blue-count">8</div></div>
+      <div class="hud-icon blue-icon">B</div>
+    </div>
+  </div>
+  <div id="status-bar">Simulation initializing...</div>
+  <div id="winner-banner">
+    <div class="scroll-bg">
+      <div class="winner-title" id="winner-text"></div>
+      <div class="winner-sub" id="winner-sub"></div>
+      <button id="restart-btn" onclick="location.reload()">Play Again</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// ISOMETRIC ADVERSARIAL SIMULATION — Pure Canvas 2D
+// ============================================================
+const C = document.getElementById('gc');
+const ctx = C.getContext('2d');
+let W, H;
+function resize() {
+  W = C.width = window.innerWidth;
+  H = C.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ---- CONSTANTS ----
+const MAP_W = 24, MAP_H = 24;
+const TW = 48, TH = 24; // tile width/height for isometric
+const HALF_TW = TW / 2, HALF_TH = TH / 2;
+
+// ---- SIMPLEX-LIKE NOISE ----
+function makeNoise(seed) {
+  const p = new Uint8Array(512);
+  let s = seed || 42;
+  function rng() { s = (s * 16807 + 0) % 2147483647; return (s - 1) / 2147483646; }
+  const perm = Array.from({length:256}, (_,i) => i);
+  for (let i = 255; i > 0; i--) { const j = (rng() * (i+1))|0; [perm[i],perm[j]] = [perm[j],perm[i]]; }
+  for (let i = 0; i < 512; i++) p[i] = perm[i & 255];
+  const G = [[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
+  function dot(gi, x, y) { const g = G[gi % 8]; return g[0]*x + g[1]*y; }
+  function fade(t) { return t*t*t*(t*(t*6-15)+10); }
+  function lerp(a,b,t) { return a + t*(b-a); }
+  return function(x, y) {
+    const X = Math.floor(x) & 255, Y = Math.floor(y) & 255;
+    const xf = x - Math.floor(x), yf = y - Math.floor(y);
+    const u = fade(xf), v = fade(yf);
+    const aa = p[p[X]+Y], ab = p[p[X]+Y+1], ba = p[p[X+1]+Y], bb = p[p[X+1]+Y+1];
+    return lerp(lerp(dot(aa,xf,yf), dot(ba,xf-1,yf), u),
+                lerp(dot(ab,xf,yf-1), dot(bb,xf-1,yf-1), u), v);
+  };
+}
+
+// ---- TERRAIN GENERATION ----
+const TILE_GRASS = 0, TILE_WATER = 1, TILE_MOUNTAIN = 2, TILE_FOREST = 3, TILE_ROAD = 4;
+const noise = makeNoise(Math.random() * 99999 | 0);
+const noise2 = makeNoise(Math.random() * 99999 | 0);
+const terrain = [];
+const tileVariation = []; // per-tile random for visual variation
+
+for (let y = 0; y < MAP_H; y++) {
+  terrain[y] = [];
+  tileVariation[y] = [];
+  for (let x = 0; x < MAP_W; x++) {
+    const n = noise(x * 0.12, y * 0.12) + 0.5 * noise(x * 0.25, y * 0.25);
+    const n2 = noise2(x * 0.15, y * 0.15);
+    tileVariation[y][x] = Math.random();
+    if (n < -0.35) terrain[y][x] = TILE_WATER;
+    else if (n > 0.55) terrain[y][x] = TILE_MOUNTAIN;
+    else if (n2 > 0.25 && n > -0.1) terrain[y][x] = TILE_FOREST;
+    else terrain[y][x] = TILE_GRASS;
+  }
+}
+
+// Clear area around blue base (center-ish)
+const BASE_X = 16, BASE_Y = 16;
+for (let dy = -3; dy <= 3; dy++) {
+  for (let dx = -3; dx <= 3; dx++) {
+    const tx = BASE_X + dx, ty = BASE_Y + dy;
+    if (tx >= 0 && tx < MAP_W && ty >= 0 && ty < MAP_H) {
+      if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) terrain[ty][tx] = TILE_GRASS;
+      else if (terrain[ty][tx] === TILE_WATER || terrain[ty][tx] === TILE_MOUNTAIN)
+        terrain[ty][tx] = TILE_GRASS;
+    }
+  }
+}
+
+// Create roads from edges toward base
+function carvePath(sx, sy, ex, ey) {
+  let cx = sx, cy = sy;
+  let steps = 0;
+  while ((cx !== ex || cy !== ey) && steps < 80) {
+    if (cx >= 0 && cx < MAP_W && cy >= 0 && cy < MAP_H) {
+      if (terrain[cy][cx] !== TILE_WATER) terrain[cy][cx] = TILE_ROAD;
+    }
+    if (Math.random() < 0.6) {
+      if (cx < ex) cx++; else if (cx > ex) cx--;
+    } else {
+      if (cy < ey) cy++; else if (cy > ey) cy--;
+    }
+    steps++;
+  }
+}
+carvePath(2, 2, BASE_X, BASE_Y);
+carvePath(0, MAP_H/2|0, BASE_X, BASE_Y);
+carvePath(MAP_W/2|0, 0, BASE_X, BASE_Y);
+
+// Ensure red spawn area is accessible
+for (let dy = -1; dy <= 1; dy++) {
+  for (let dx = -1; dx <= 1; dx++) {
+    const tx = 3 + dx, ty = 3 + dy;
+    if (tx >= 0 && tx < MAP_W && ty >= 0 && ty < MAP_H) {
+      if (terrain[ty][tx] === TILE_WATER || terrain[ty][tx] === TILE_MOUNTAIN)
+        terrain[ty][tx] = TILE_GRASS;
+    }
+  }
+}
+
+// ---- ISOMETRIC HELPERS ----
+let camX = 0, camY = 0;
+function isoProject(tx, ty) {
+  const sx = (tx - ty) * HALF_TW;
+  const sy = (tx + ty) * HALF_TH;
+  return [sx + W/2 - camX, sy + 100 - camY];
+}
+
+function screenToTile(sx, sy) {
+  const ax = sx - W/2 + camX;
+  const ay = sy - 100 + camY;
+  const tx = (ax / HALF_TW + ay / HALF_TH) / 2;
+  const ty = (ay / HALF_TH - ax / HALF_TW) / 2;
+  return [Math.floor(tx), Math.floor(ty)];
+}
+
+// Center camera on base
+camX = (BASE_X - BASE_Y) * HALF_TW;
+camY = (BASE_X + BASE_Y) * HALF_TH - H / 2 + 100;
+
+// ---- BUILDINGS ----
+const buildings = [];
+// Blue castle at base
+buildings.push({ type:'castle', tx:BASE_X, ty:BASE_Y, team:'blue' });
+// Houses around base
+const houseOffsets = [[-2,-1],[-1,-2],[1,-2],[2,-1],[2,1],[1,2],[-1,2],[-2,1]];
+for (const [dx,dy] of houseOffsets) {
+  const hx = BASE_X+dx, hy = BASE_Y+dy;
+  if (hx >= 0 && hx < MAP_W && hy >= 0 && hy < MAP_H && terrain[hy][hx] !== TILE_WATER && terrain[hy][hx] !== TILE_MOUNTAIN) {
+    if (Math.random() < 0.6) buildings.push({ type:'house', tx:hx, ty:hy, team:'blue' });
+  }
+}
+// Walls
+const wallOffsets = [[-1,-1],[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0]];
+for (const [dx,dy] of wallOffsets) {
+  const wx = BASE_X+dx, wy = BASE_Y+dy;
+  if (terrain[wy] && terrain[wy][wx] !== undefined && terrain[wy][wx] !== TILE_WATER) {
+    let hasHouse = buildings.some(b => b.tx === wx && b.ty === wy && b.type === 'house');
+    if (!hasHouse) buildings.push({ type:'wall', tx:wx, ty:wy, team:'blue' });
+  }
+}
+
+// ---- UNITS ----
+const units = [];
+const UNIT_TYPES = { warrior:'warrior', archer:'archer' };
+
+function findWalkable(cx, cy, radius) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const tx = cx + ((Math.random() * radius * 2 - radius) | 0);
+    const ty = cy + ((Math.random() * radius * 2 - radius) | 0);
+    if (tx >= 0 && tx < MAP_W && ty >= 0 && ty < MAP_H &&
+        terrain[ty][tx] !== TILE_WATER && terrain[ty][tx] !== TILE_MOUNTAIN) {
+      let occupied = units.some(u => Math.round(u.tx) === tx && Math.round(u.ty) === ty);
+      if (!occupied) return [tx, ty];
+    }
+  }
+  return [cx, cy];
+}
+
+// Red invaders (spawn top-left area)
+for (let i = 0; i < 10; i++) {
+  const [tx, ty] = findWalkable(3, 3, 4);
+  units.push({
+    team:'red', type: i < 6 ? 'warrior' : 'archer',
+    tx, ty, // logical tile position
+    rx: tx, ry: ty, // render position (smooth)
+    hp: i < 6 ? 100 : 70,
+    maxHp: i < 6 ? 100 : 70,
+    atk: i < 6 ? 18 : 22,
+    range: i < 6 ? 1.5 : 5,
+    speed: 0.015 + Math.random() * 0.005,
+    alive: true,
+    targetTx: BASE_X, targetTy: BASE_Y,
+    attackCd: 0,
+    bobPhase: Math.random() * Math.PI * 2,
+    state: 'move', // move, attack, idle
+    targetUnit: null,
+    pathIndex: 0,
+  });
+}
+
+// Blue defenders
+for (let i = 0; i < 8; i++) {
+  const [tx, ty] = findWalkable(BASE_X, BASE_Y, 3);
+  units.push({
+    team:'blue', type: i < 5 ? 'warrior' : 'archer',
+    tx, ty, rx: tx, ry: ty,
+    hp: i < 5 ? 110 : 75,
+    maxHp: i < 5 ? 110 : 75,
+    atk: i < 5 ? 16 : 20,
+    range: i < 5 ? 1.5 : 5,
+    speed: 0.012 + Math.random() * 0.004,
+    alive: true,
+    attackCd: 0,
+    bobPhase: Math.random() * Math.PI * 2,
+    state: 'idle',
+    targetUnit: null,
+    guardX: tx, guardY: ty,
+  });
+}
+
+// ---- PROJECTILES ----
+const projectiles = [];
+function spawnArrow(from, to) {
+  projectiles.push({
+    sx: from.rx, sy: from.ry,
+    tx: to.rx, ty: to.ry,
+    t: 0,
+    damage: from.atk,
+    target: to,
+    team: from.team,
+  });
+}
+
+// ---- PARTICLES ----
+const particles = [];
+function spawnParticles(wx, wy, color, count, spread, life) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x: wx, y: wy,
+      vx: (Math.random()-0.5) * spread,
+      vy: (Math.random()-0.5) * spread - 1,
+      life: life * (0.5 + Math.random()*0.5),
+      maxLife: life,
+      color,
+      size: 1.5 + Math.random() * 2,
+    });
+  }
+}
+
+// Ambient particles (leaves, smoke)
+const ambientParticles = [];
+function spawnAmbient() {
+  // Leaves
+  if (Math.random() < 0.03) {
+    ambientParticles.push({
+      type:'leaf',
+      tx: Math.random() * MAP_W,
+      ty: Math.random() * MAP_H,
+      vx: 0.005 + Math.random()*0.01,
+      vy: 0.003 + Math.random()*0.005,
+      life: 200 + Math.random()*200,
+      phase: Math.random() * Math.PI * 2,
+      color: ['#4a7c3f','#5a8c4f','#3a6c2f','#6a9c5f'][Math.random()*4|0],
+    });
+  }
+  // Smoke near castle
+  if (Math.random() < 0.05) {
+    ambientParticles.push({
+      type:'smoke',
+      tx: BASE_X + (Math.random()-0.5)*0.5,
+      ty: BASE_Y + (Math.random()-0.5)*0.5,
+      vx: (Math.random()-0.5)*0.003,
+      vy: -0.01 - Math.random()*0.005,
+      life: 100 + Math.random()*100,
+      maxLife: 200,
+      size: 2 + Math.random()*3,
+    });
+  }
+}
+
+// ---- DRAWING FUNCTIONS ----
+function drawIsoDiamond(sx, sy, fill, stroke) {
+  ctx.beginPath();
+  ctx.moveTo(sx, sy - HALF_TH);
+  ctx.lineTo(sx + HALF_TW, sy);
+  ctx.lineTo(sx, sy + HALF_TH);
+  ctx.lineTo(sx - HALF_TW, sy);
+  ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 0.5; ctx.stroke(); }
+}
+
+function drawTile(tx, ty, time) {
+  const [sx, sy] = isoProject(tx, ty);
+  // Off-screen cull
+  if (sx < -TW*2 || sx > W+TW*2 || sy < -TH*4 || sy > H+TH*4) return;
+
+  const t = terrain[ty][tx];
+  const v = tileVariation[ty][tx];
+
+  if (t === TILE_GRASS) {
+    const g = 100 + (v * 30) | 0;
+    drawIsoDiamond(sx, sy, `rgb(${60+v*10|0},${g},${40+v*15|0})`, 'rgba(0,0,0,0.1)');
+    // Subtle grass blades
+    if (v > 0.7) {
+      ctx.strokeStyle = `rgba(${40+v*20|0},${g+20},${30},0.5)`;
+      ctx.lineWidth = 0.5;
+      for (let i = 0; i < 3; i++) {
+        const gx = sx + (v*10-5) + i*4 - 4;
+        const gy = sy + (v*4-2);
+        ctx.beginPath();
+        ctx.moveTo(gx, gy);
+        ctx.lineTo(gx + Math.sin(time*0.002 + v*10)*2, gy - 3 - v*2);
+        ctx.stroke();
+      }
+    }
+  } else if (t === TILE_WATER) {
+    const waveOff = Math.sin(time * 0.003 + tx * 0.8 + ty * 0.6) * 8;
+    const b = 140 + waveOff | 0;
+    const b2 = 80 + (waveOff * 0.5) | 0;
+    drawIsoDiamond(sx, sy, `rgb(${30+waveOff*0.3|0},${b2},${b})`, 'rgba(0,0,50,0.2)');
+    // Wave highlights
+    ctx.strokeStyle = `rgba(150,200,255,${0.15 + Math.sin(time*0.004+tx+ty)*0.1})`;
+    ctx.lineWidth = 0.8;
+    const wo = Math.sin(time*0.005+tx*1.2) * 3;
+    ctx.beginPath();
+    ctx.moveTo(sx - 8 + wo, sy - 2);
+    ctx.quadraticCurveTo(sx + wo, sy - 4 + wo*0.3, sx + 8 + wo, sy - 2);
+    ctx.stroke();
+  } else if (t === TILE_MOUNTAIN) {
+    drawIsoDiamond(sx, sy, `rgb(${100+v*20|0},${95+v*15|0},${85+v*15|0})`, 'rgba(0,0,0,0.15)');
+    // Mountain peak
+    ctx.beginPath();
+    ctx.moveTo(sx - 6, sy + 2);
+    ctx.lineTo(sx, sy - 10 - v*4);
+    ctx.lineTo(sx + 6, sy + 2);
+    ctx.closePath();
+    ctx.fillStyle = `rgb(${120+v*25|0},${115+v*20|0},${105+v*20|0})`;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+    // Snow cap
+    ctx.beginPath();
+    ctx.moveTo(sx - 2, sy - 5 - v*2);
+    ctx.lineTo(sx, sy - 10 - v*4);
+    ctx.lineTo(sx + 2, sy - 5 - v*2);
+    ctx.closePath();
+    ctx.fillStyle = `rgba(230,235,240,${0.6+v*0.3})`;
+    ctx.fill();
+  } else if (t === TILE_FOREST) {
+    const g = 90 + (v * 25) | 0;
+    drawIsoDiamond(sx, sy, `rgb(${45+v*10|0},${g-10},${35+v*10|0})`, 'rgba(0,0,0,0.1)');
+    // Trees (2-3 little triangles)
+    const treeCount = 2 + (v > 0.5 ? 1 : 0);
+    for (let i = 0; i < treeCount; i++) {
+      const ox = (i - 1) * 7 + (v-0.5)*4;
+      const oy = (i - 1) * 2 - 2;
+      const th = 8 + v * 5;
+      // Trunk
+      ctx.fillStyle = '#5a3a1a';
+      ctx.fillRect(sx + ox - 0.5, sy + oy - th*0.3, 1.5, th*0.4);
+      // Foliage
+      ctx.beginPath();
+      ctx.moveTo(sx + ox - 4, sy + oy);
+      ctx.lineTo(sx + ox + 0.5, sy + oy - th);
+      ctx.lineTo(sx + ox + 5, sy + oy);
+      ctx.closePath();
+      ctx.fillStyle = `rgb(${35+v*15+i*8|0},${80+v*20+i*5|0},${25+v*10|0})`;
+      ctx.fill();
+      // Lighter layer
+      ctx.beginPath();
+      ctx.moveTo(sx + ox - 3, sy + oy - th*0.3);
+      ctx.lineTo(sx + ox + 0.5, sy + oy - th + 2);
+      ctx.lineTo(sx + ox + 3.5, sy + oy - th*0.3);
+      ctx.closePath();
+      ctx.fillStyle = `rgb(${50+v*15+i*5|0},${100+v*20+i*5|0},${35+v*10|0})`;
+      ctx.fill();
+    }
+  } else if (t === TILE_ROAD) {
+    drawIsoDiamond(sx, sy, `rgb(${160+v*15|0},${140+v*12|0},${100+v*10|0})`, 'rgba(0,0,0,0.08)');
+    // Road texture dots
+    ctx.fillStyle = `rgba(120,100,70,0.3)`;
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath();
+      ctx.arc(sx + (v*12-6) + i*5-5, sy + (v*4-2), 0.8, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+}
+
+function drawCastle(sx, sy) {
+  const bw = 24, bh = 20, wallH = 16;
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.beginPath();
+  ctx.ellipse(sx, sy + 6, 18, 6, 0, 0, Math.PI*2);
+  ctx.fill();
+  // Base wall (isometric box)
+  // Front face
+  ctx.fillStyle = '#5577bb';
+  ctx.beginPath();
+  ctx.moveTo(sx - bw/2, sy - wallH);
+  ctx.lineTo(sx, sy - wallH + bh/2);
+  ctx.lineTo(sx, sy + bh/2);
+  ctx.lineTo(sx - bw/2, sy);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#334477';
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+  // Right face
+  ctx.fillStyle = '#4466aa';
+  ctx.beginPath();
+  ctx.moveTo(sx, sy - wallH + bh/2);
+  ctx.lineTo(sx + bw/2, sy - wallH);
+  ctx.lineTo(sx + bw/2, sy);
+  ctx.lineTo(sx, sy + bh/2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // Top face
+  ctx.fillStyle = '#6688cc';
+  ctx.beginPath();
+  ctx.moveTo(sx, sy - wallH - bh/2 + 4);
+  ctx.lineTo(sx + bw/2, sy - wallH);
+  ctx.lineTo(sx, sy - wallH + bh/2);
+  ctx.lineTo(sx - bw/2, sy - wallH);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // Crenellations
+  const crenH = 5;
+  ctx.fillStyle = '#5577bb';
+  for (let i = 0; i < 3; i++) {
+    const cx = sx - 10 + i * 8;
+    const cy = sy - wallH - bh/2 + 4 - 2 + i * 0;
+    ctx.fillRect(cx - 2, cy - crenH - 2 + i*2, 4, crenH);
+    ctx.strokeRect(cx - 2, cy - crenH - 2 + i*2, 4, crenH);
+  }
+  // Tower
+  ctx.fillStyle = '#4466aa';
+  ctx.fillRect(sx - 4, sy - wallH - 18, 8, 14);
+  ctx.strokeRect(sx - 4, sy - wallH - 18, 8, 14);
+  // Tower top
+  ctx.fillStyle = '#3355aa';
+  ctx.beginPath();
+  ctx.moveTo(sx - 6, sy - wallH - 18);
+  ctx.lineTo(sx, sy - wallH - 26);
+  ctx.lineTo(sx + 6, sy - wallH - 18);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // Flag
+  ctx.strokeStyle = '#aaa';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(sx, sy - wallH - 26);
+  ctx.lineTo(sx, sy - wallH - 36);
+  ctx.stroke();
+  ctx.fillStyle = '#4488ff';
+  ctx.beginPath();
+  ctx.moveTo(sx, sy - wallH - 36);
+  ctx.lineTo(sx + 8, sy - wallH - 33);
+  ctx.lineTo(sx, sy - wallH - 30);
+  ctx.closePath();
+  ctx.fill();
+  // Door
+  ctx.fillStyle = '#2a3a5a';
+  ctx.beginPath();
+  ctx.arc(sx, sy - 2, 3, Math.PI, 0);
+  ctx.lineTo(sx + 3, sy + 4);
+  ctx.lineTo(sx - 3, sy + 4);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawHouse(sx, sy) {
+  const hw = 12, hh = 8, roofH = 8;
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  ctx.beginPath();
+  ctx.ellipse(sx, sy + 3, 8, 3, 0, 0, Math.PI*2);
+  ctx.fill();
+  // Front
+  ctx.fillStyle = '#c4a87a';
+  ctx.beginPath();
+  ctx.moveTo(sx - hw/2, sy - hh);
+  ctx.lineTo(sx, sy - hh + 4);
+  ctx.lineTo(sx, sy + 4);
+  ctx.lineTo(sx - hw/2, sy);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#8a7050';
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+  // Side
+  ctx.fillStyle = '#b09868';
+  ctx.beginPath();
+  ctx.moveTo(sx, sy - hh + 4);
+  ctx.lineTo(sx + hw/2, sy - hh);
+  ctx.lineTo(sx + hw/2, sy);
+  ctx.lineTo(sx, sy + 4);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // Roof
+  ctx.fillStyle = '#884422';
+  ctx.beginPath();
+  ctx.moveTo(sx, sy - hh - roofH);
+  ctx.lineTo(sx + hw/2 + 2, sy - hh + 1);
+  ctx.lineTo(sx, sy - hh + 5);
+  ctx.lineTo(sx - hw/2 - 2, sy - hh + 1);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#663311';
+  ctx.stroke();
+  // Window
+  ctx.fillStyle = '#ffee88';
+  ctx.fillRect(sx - 3, sy - hh + 1, 2.5, 2.5);
+}
+
+function drawWall(sx, sy) {
+  ctx.fillStyle = '#667799';
+  ctx.beginPath();
+  ctx.moveTo(sx - HALF_TW*0.5, sy - 6);
+  ctx.lineTo(sx, sy - 6 - 3);
+  ctx.lineTo(sx + HALF_TW*0.5, sy - 6);
+  ctx.lineTo(sx + HALF_TW*0.5, sy);
+  ctx.lineTo(sx, sy + 3);
+  ctx.lineTo(sx - HALF_TW*0.5, sy);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#445566';
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+  // Top
+  ctx.fillStyle = '#7788aa';
+  ctx.beginPath();
+  ctx.moveTo(sx, sy - 9);
+  ctx.lineTo(sx + HALF_TW*0.5, sy - 6);
+  ctx.lineTo(sx, sy - 3);
+  ctx.lineTo(sx - HALF_TW*0.5, sy - 6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // Crenellations
+  ctx.fillStyle = '#667799';
+  for (let i = -1; i <= 1; i += 2) {
+    ctx.fillRect(sx + i*4 - 1.5, sy - 11, 3, 3);
+  }
+}
+
+function drawUnit(unit, time) {
+  const [sx, sy] = isoProject(unit.rx, unit.ry);
+  if (sx < -50 || sx > W+50 || sy < -50 || sy > H+50) return;
+
+  const bob = Math.sin(time * 0.005 + unit.bobPhase) * 1.5;
+  const baseY = sy - 4 + bob;
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.beginPath();
+  ctx.ellipse(sx, sy + 2, 5, 2, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  const isRed = unit.team === 'red';
+  const isArcher = unit.type === 'archer';
+
+  // Body (isometric diamond figure)
+  // Legs
+  ctx.strokeStyle = isRed ? '#aa3333' : '#3355aa';
+  ctx.lineWidth = 1.5;
+  const legSpread = Math.sin(time * 0.008 + unit.bobPhase) * (unit.state === 'move' ? 2 : 0.5);
+  ctx.beginPath();
+  ctx.moveTo(sx - 2 - legSpread, sy + 1);
+  ctx.lineTo(sx, baseY + 4);
+  ctx.moveTo(sx + 2 + legSpread, sy + 1);
+  ctx.lineTo(sx, baseY + 4);
+  ctx.stroke();
+
+  // Torso
+  ctx.fillStyle = isRed ? '#cc3333' : '#3366cc';
+  ctx.beginPath();
+  ctx.moveTo(sx, baseY - 2);
+  ctx.lineTo(sx + 4, baseY + 2);
+  ctx.lineTo(sx, baseY + 6);
+  ctx.lineTo(sx - 4, baseY + 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = isRed ? '#881111' : '#1133aa';
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+
+  // Head
+  ctx.fillStyle = '#e8c8a0';
+  ctx.beginPath();
+  ctx.arc(sx, baseY - 4, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#a08060';
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+
+  // Helmet
+  ctx.fillStyle = isRed ? '#cc4444' : '#4477dd';
+  ctx.beginPath();
+  ctx.arc(sx, baseY - 5, 3, Math.PI, 0);
+  ctx.fill();
+
+  if (isArcher) {
+    // Bow
+    ctx.strokeStyle = '#8B4513';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(sx + 5, baseY, 5, -0.8, 0.8);
+    ctx.stroke();
+    // Bowstring
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(sx + 5 + Math.cos(-0.8)*5, baseY + Math.sin(-0.8)*5);
+    ctx.lineTo(sx + 5 + Math.cos(0.8)*5, baseY + Math.sin(0.8)*5);
+    ctx.stroke();
+  } else {
+    // Sword
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    const swingAngle = unit.state === 'attack' ? Math.sin(time * 0.015) * 0.5 : 0;
+    ctx.moveTo(sx + 4, baseY + 1);
+    ctx.lineTo(sx + 9 + Math.cos(swingAngle)*2, baseY - 4 + Math.sin(swingAngle)*2);
+    ctx.stroke();
+    // Hilt
+    ctx.strokeStyle = '#8B4513';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(sx + 3, baseY + 1);
+    ctx.lineTo(sx + 5, baseY + 1);
+    ctx.stroke();
+  }
+
+  // Shield for warriors
+  if (!isArcher) {
+    ctx.fillStyle = isRed ? '#aa2222' : '#2244aa';
+    ctx.beginPath();
+    ctx.ellipse(sx - 5, baseY + 1, 2.5, 3.5, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = isRed ? '#661111' : '#112266';
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+    // Shield emblem
+    ctx.fillStyle = isRed ? '#ff6666' : '#6699ff';
+    ctx.beginPath();
+    ctx.arc(sx - 5, baseY + 1, 1, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // Team flag on back
+  ctx.strokeStyle = '#888';
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(sx - 1, baseY - 6);
+  ctx.lineTo(sx - 1, baseY - 14);
+  ctx.stroke();
+  ctx.fillStyle = isRed ? '#ff3333' : '#3366ff';
+  ctx.beginPath();
+  ctx.moveTo(sx - 1, baseY - 14);
+  ctx.lineTo(sx - 6, baseY - 12);
+  ctx.lineTo(sx - 1, baseY - 10);
+  ctx.closePath();
+  ctx.fill();
+
+  // Health bar
+  if (unit.hp < unit.maxHp) {
+    const barW = 16, barH = 2.5;
+    const barX = sx - barW/2;
+    const barY = baseY - 18;
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
+    const hpFrac = unit.hp / unit.maxHp;
+    ctx.fillStyle = hpFrac > 0.5 ? '#44cc44' : hpFrac > 0.25 ? '#ccaa44' : '#cc4444';
+    ctx.fillRect(barX, barY, barW * hpFrac, barH);
+  }
+}
+
+// ---- MINIMAP ----
+function drawMinimap() {
+  const mmW = 120, mmH = 80;
+  const mmX = W - mmW - 12, mmY = H - mmH - 40;
+  // Background
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(mmX - 2, mmY - 2, mmW + 4, mmH + 4);
+  ctx.strokeStyle = '#8b6914';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(mmX - 2, mmY - 2, mmW + 4, mmH + 4);
+
+  const scaleX = mmW / MAP_W;
+  const scaleY = mmH / MAP_H;
+
+  for (let y = 0; y < MAP_H; y++) {
+    for (let x = 0; x < MAP_W; x++) {
+      const t = terrain[y][x];
+      if (t === TILE_WATER) ctx.fillStyle = '#2255aa';
+      else if (t === TILE_MOUNTAIN) ctx.fillStyle = '#888877';
+      else if (t === TILE_FOREST) ctx.fillStyle = '#336633';
+      else if (t === TILE_ROAD) ctx.fillStyle = '#998866';
+      else ctx.fillStyle = '#447744';
+      ctx.fillRect(mmX + x * scaleX, mmY + y * scaleY, scaleX + 0.5, scaleY + 0.5);
+    }
+  }
+
+  // Buildings on minimap
+  for (const b of buildings) {
+    ctx.fillStyle = '#5588dd';
+    ctx.fillRect(mmX + b.tx * scaleX, mmY + b.ty * scaleY, scaleX + 1, scaleY + 1);
+  }
+
+  // Units on minimap
+  for (const u of units) {
+    if (!u.alive) continue;
+    ctx.fillStyle = u.team === 'red' ? '#ff4444' : '#4488ff';
+    ctx.beginPath();
+    ctx.arc(mmX + u.rx * scaleX, mmY + u.ry * scaleY, 2, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // Camera viewport on minimap
+  const [tlTx, tlTy] = screenToTile(0, 0);
+  const [brTx, brTy] = screenToTile(W, H);
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(
+    mmX + Math.max(0,tlTx) * scaleX,
+    mmY + Math.max(0,tlTy) * scaleY,
+    Math.min(MAP_W, brTx - tlTx) * scaleX,
+    Math.min(MAP_H, brTy - tlTy) * scaleY
+  );
+}
+
+// ---- GAME STATE ----
+let gameTime = 0;
+let simTime = 0;
+let gameOver = false;
+let winner = null;
+let hoverTile = [-1, -1];
+
+// ---- PATHFINDING (simple A*) ----
+function tileDist(ax, ay, bx, by) {
+  return Math.abs(ax-bx) + Math.abs(ay-by);
+}
+
+function isWalkable(tx, ty) {
+  if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= MAP_H) return false;
+  const t = terrain[ty][tx];
+  return t !== TILE_WATER && t !== TILE_MOUNTAIN;
+}
+
+function findPath(sx, sy, ex, ey) {
+  // Clamp endpoints
+  sx = Math.round(sx); sy = Math.round(sy);
+  ex = Math.round(ex); ey = Math.round(ey);
+  if (!isWalkable(ex, ey)) {
+    // Find nearest walkable
+    for (let r = 1; r < 5; r++) {
+      for (let dx = -r; dx <= r; dx++) {
+        for (let dy = -r; dy <= r; dy++) {
+          if (isWalkable(ex+dx, ey+dy)) { ex += dx; ey += dy; break; }
+        }
+      }
+    }
+  }
+
+  const open = [{x:sx,y:sy,g:0,h:tileDist(sx,sy,ex,ey),parent:null}];
+  const closed = new Set();
+  const key = (x,y) => x*1000+y;
+  let best = open[0];
+  let iters = 0;
+
+  while (open.length > 0 && iters < 300) {
+    iters++;
+    open.sort((a,b) => (a.g+a.h) - (b.g+b.h));
+    const curr = open.shift();
+    if (curr.x === ex && curr.y === ey) { best = curr; break; }
+    if (curr.h < best.h) best = curr;
+    closed.add(key(curr.x, curr.y));
+
+    for (const [dx, dy] of [[0,1],[1,0],[0,-1],[-1,0],[1,1],[-1,-1],[1,-1],[-1,1]]) {
+      const nx = curr.x + dx, ny = curr.y + dy;
+      if (!isWalkable(nx, ny) || closed.has(key(nx, ny))) continue;
+      const ng = curr.g + (dx && dy ? 1.4 : 1);
+      const existing = open.find(n => n.x === nx && n.y === ny);
+      if (!existing || ng < existing.g) {
+        if (existing) { existing.g = ng; existing.parent = curr; }
+        else open.push({x:nx, y:ny, g:ng, h:tileDist(nx,ny,ex,ey), parent:curr});
+      }
+    }
+  }
+
+  // Reconstruct path
+  const path = [];
+  let node = best;
+  while (node) { path.unshift({x:node.x, y:node.y}); node = node.parent; }
+  return path;
+}
+
+// Precompute initial paths for red units
+for (const u of units) {
+  if (u.team === 'red') {
+    u.path = findPath(u.tx, u.ty, BASE_X, BASE_Y);
+    u.pathIndex = 0;
+  }
+}
+
+// ---- INPUT ----
+let mouseX = 0, mouseY = 0;
+let isDragging = false, dragStartX = 0, dragStartY = 0, camStartX = 0, camStartY = 0;
+
+C.addEventListener('mousemove', e => {
+  mouseX = e.clientX;
+  mouseY = e.clientY;
+  const [tx, ty] = screenToTile(mouseX, mouseY);
+  hoverTile = [tx, ty];
+  if (isDragging) {
+    camX = camStartX - (e.clientX - dragStartX);
+    camY = camStartY - (e.clientY - dragStartY);
+  }
+});
+
+C.addEventListener('mousedown', e => {
+  isDragging = true;
+  dragStartX = e.clientX;
+  dragStartY = e.clientY;
+  camStartX = camX;
+  camStartY = camY;
+});
+
+C.addEventListener('mouseup', () => { isDragging = false; });
+
+C.addEventListener('wheel', e => {
+  // Pan with wheel
+  camX += e.deltaX * 0.5;
+  camY += e.deltaY * 0.5;
+});
+
+// ---- UPDATE ----
+function update(dt) {
+  if (gameOver) return;
+  simTime += dt;
+
+  const aliveRed = units.filter(u => u.team === 'red' && u.alive);
+  const aliveBlue = units.filter(u => u.team === 'blue' && u.alive);
+
+  document.getElementById('red-count').textContent = aliveRed.length;
+  document.getElementById('blue-count').textContent = aliveBlue.length;
+
+  const totalSec = simTime / 1000 | 0;
+  const mins = (totalSec / 60 | 0).toString().padStart(2, '0');
+  const secs = (totalSec % 60).toString().padStart(2, '0');
+  document.getElementById('timer-display').textContent = `${mins}:${secs}`;
+
+  // Check win conditions
+  if (aliveRed.length === 0) {
+    gameOver = true; winner = 'blue';
+    document.getElementById('winner-text').textContent = 'Blue Defenders Victory!';
+    document.getElementById('winner-sub').textContent = 'The settlement stands strong. The invaders have been repelled.';
+    document.getElementById('winner-banner').style.display = 'block';
+    document.getElementById('status-bar').textContent = 'Blue wins! Settlement defended.';
+    return;
+  }
+  if (aliveBlue.length === 0) {
+    gameOver = true; winner = 'red';
+    document.getElementById('winner-text').textContent = 'Red Invaders Victory!';
+    document.getElementById('winner-sub').textContent = 'The settlement has fallen. The invaders claim this land.';
+    document.getElementById('winner-banner').style.display = 'block';
+    document.getElementById('status-bar').textContent = 'Red wins! Settlement conquered.';
+    return;
+  }
+
+  // Update units
+  for (const u of units) {
+    if (!u.alive) continue;
+    u.attackCd = Math.max(0, u.attackCd - dt);
+    u.bobPhase += dt * 0.003;
+
+    // Find nearest enemy
+    const enemies = u.team === 'red' ? aliveBlue : aliveRed;
+    let nearest = null, nearDist = Infinity;
+    for (const e of enemies) {
+      const d = Math.hypot(u.rx - e.rx, u.ry - e.ry);
+      if (d < nearDist) { nearDist = d; nearest = e; }
+    }
+
+    u.targetUnit = nearest;
+
+    if (nearest && nearDist < u.range) {
+      // Attack
+      u.state = 'attack';
+      if (u.attackCd <= 0) {
+        u.attackCd = u.type === 'archer' ? 1500 : 800;
+        if (u.type === 'archer') {
+          spawnArrow(u, nearest);
+        } else {
+          // Melee hit
+          const dmg = u.atk * (0.8 + Math.random() * 0.4);
+          nearest.hp -= dmg;
+          // Spark particles at midpoint
+          const [sx, sy] = isoProject((u.rx + nearest.rx)/2, (u.ry + nearest.ry)/2);
+          spawnParticles(sx, sy - 6, '#ffcc00', 6, 4, 400);
+          spawnParticles(sx, sy - 6, '#ff6600', 3, 3, 300);
+          if (nearest.hp <= 0) {
+            nearest.alive = false;
+            const [dx, dy] = isoProject(nearest.rx, nearest.ry);
+            spawnParticles(dx, dy - 4, nearest.team === 'red' ? '#ff4444' : '#4488ff', 12, 6, 600);
+          }
+        }
+      }
+    } else {
+      // Move
+      u.state = 'move';
+      if (u.team === 'red') {
+        // Follow path or move toward nearest enemy
+        if (nearest && nearDist < 8) {
+          // Pursue
+          const dx = nearest.rx - u.rx;
+          const dy = nearest.ry - u.ry;
+          const len = Math.hypot(dx, dy);
+          if (len > 0.1) {
+            const ntx = u.rx + (dx/len) * u.speed * dt;
+            const nty = u.ry + (dy/len) * u.speed * dt;
+            if (isWalkable(Math.round(ntx), Math.round(nty))) {
+              u.rx = ntx; u.ry = nty;
+              u.tx = Math.round(u.rx); u.ty = Math.round(u.ry);
+            }
+          }
+        } else if (u.path && u.pathIndex < u.path.length) {
+          const target = u.path[u.pathIndex];
+          const dx = target.x - u.rx;
+          const dy = target.y - u.ry;
+          const len = Math.hypot(dx, dy);
+          if (len < 0.15) {
+            u.pathIndex++;
+          } else {
+            u.rx += (dx/len) * u.speed * dt;
+            u.ry += (dy/len) * u.speed * dt;
+            u.tx = Math.round(u.rx);
+            u.ty = Math.round(u.ry);
+          }
+        }
+      } else {
+        // Blue: defend - move toward enemy if nearby, else guard position
+        if (nearest && nearDist < 7) {
+          const dx = nearest.rx - u.rx;
+          const dy = nearest.ry - u.ry;
+          const len = Math.hypot(dx, dy);
+          if (len > u.range * 0.7) {
+            const ntx = u.rx + (dx/len) * u.speed * dt;
+            const nty = u.ry + (dy/len) * u.speed * dt;
+            // Don't go too far from guard position
+            if (Math.hypot(ntx - u.guardX, nty - u.guardY) < 6) {
+              if (isWalkable(Math.round(ntx), Math.round(nty))) {
+                u.rx = ntx; u.ry = nty;
+                u.tx = Math.round(u.rx); u.ty = Math.round(u.ry);
+              }
+            }
+          }
+        } else {
+          // Return to guard position
+          const dx = u.guardX - u.rx;
+          const dy = u.guardY - u.ry;
+          const len = Math.hypot(dx, dy);
+          if (len > 0.3) {
+            u.rx += (dx/len) * u.speed * 0.5 * dt;
+            u.ry += (dy/len) * u.speed * 0.5 * dt;
+            u.tx = Math.round(u.rx); u.ty = Math.round(u.ry);
+          } else {
+            u.state = 'idle';
+          }
+        }
+      }
+    }
+  }
+
+  // Update projectiles
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    p.t += dt * 0.0015;
+    if (p.t >= 1) {
+      // Hit target
+      if (p.target.alive) {
+        p.target.hp -= p.damage * (0.8 + Math.random() * 0.4);
+        const [hx, hy] = isoProject(p.target.rx, p.target.ry);
+        spawnParticles(hx, hy - 6, '#ffaa00', 4, 3, 300);
+        if (p.target.hp <= 0) {
+          p.target.alive = false;
+          const [dx, dy] = isoProject(p.target.rx, p.target.ry);
+          spawnParticles(dx, dy - 4, p.target.team === 'red' ? '#ff4444' : '#4488ff', 12, 6, 600);
+        }
+      }
+      projectiles.splice(i, 1);
+    }
+  }
+
+  // Update particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.05;
+    p.life -= dt;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+
+  // Update ambient
+  spawnAmbient();
+  for (let i = ambientParticles.length - 1; i >= 0; i--) {
+    const p = ambientParticles[i];
+    p.tx += p.vx;
+    p.ty += p.vy;
+    p.life -= 1;
+    if (p.life <= 0) ambientParticles.splice(i, 1);
+  }
+
+  // Status bar
+  const phase = aliveRed.some(r => {
+    return aliveBlue.some(b => Math.hypot(r.rx-b.rx, r.ry-b.ry) < 3);
+  });
+  if (phase) {
+    document.getElementById('status-bar').textContent = 'COMBAT ENGAGED - Forces clashing!';
+  } else {
+    document.getElementById('status-bar').textContent = 'Red forces advancing on Blue settlement...';
+  }
+}
+
+// ---- RENDER ----
+function render(time) {
+  // Day/night cycle
+  const cycleT = (time % 60000) / 60000; // 60 second cycle
+  const sunAngle = cycleT * Math.PI * 2;
+  const dayVal = Math.sin(sunAngle) * 0.5 + 0.5; // 0=night, 1=day
+  const ambientR = 0.5 + dayVal * 0.5;
+  const ambientG = 0.45 + dayVal * 0.5;
+  const ambientB = 0.5 + (1 - dayVal) * 0.15 + dayVal * 0.3;
+
+  // Sky gradient
+  const skyTop = `rgb(${(20 + dayVal*60)|0},${(20 + dayVal*50)|0},${(50 + dayVal*80)|0})`;
+  const skyBot = `rgb(${(30 + dayVal*80)|0},${(40 + dayVal*70)|0},${(60 + dayVal*60)|0})`;
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, skyTop);
+  grad.addColorStop(1, skyBot);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Apply ambient lighting overlay (will be composited)
+  ctx.save();
+
+  // ---- Collect all renderable entities for depth sorting ----
+  const renderables = [];
+
+  // Tiles
+  for (let ty = 0; ty < MAP_H; ty++) {
+    for (let tx = 0; tx < MAP_W; tx++) {
+      renderables.push({ type:'tile', tx, ty, depth: tx + ty });
+    }
+  }
+
+  // Buildings
+  for (const b of buildings) {
+    renderables.push({ type:'building', data:b, tx:b.tx, ty:b.ty, depth: b.tx + b.ty + 0.1 });
+  }
+
+  // Units
+  for (const u of units) {
+    if (!u.alive) continue;
+    renderables.push({ type:'unit', data:u, tx:u.rx, ty:u.ry, depth: u.rx + u.ry + 0.2 });
+  }
+
+  // Sort by depth (back to front)
+  renderables.sort((a, b) => a.depth - b.depth);
+
+  // Compute fog of war based on blue units
+  const blueUnits = units.filter(u => u.team === 'blue' && u.alive);
+
+  // Render
+  for (const r of renderables) {
+    if (r.type === 'tile') {
+      drawTile(r.tx, r.ty, time);
+
+      // Fog of war
+      let minDist = Infinity;
+      for (const bu of blueUnits) {
+        const d = Math.hypot(r.tx - bu.rx, r.ty - bu.ry);
+        if (d < minDist) minDist = d;
+      }
+      // Also check distance from base
+      const baseDist = Math.hypot(r.tx - BASE_X, r.ty - BASE_Y);
+      minDist = Math.min(minDist, baseDist);
+
+      if (minDist > 4) {
+        const fogAlpha = Math.min(0.6, (minDist - 4) * 0.08);
+        const [sx, sy] = isoProject(r.tx, r.ty);
+        ctx.fillStyle = `rgba(10,10,30,${fogAlpha})`;
+        drawIsoDiamond(sx, sy, `rgba(10,10,30,${fogAlpha})`);
+      }
+
+      // Hover highlight
+      if (hoverTile[0] === r.tx && hoverTile[1] === r.ty) {
+        const [sx, sy] = isoProject(r.tx, r.ty);
+        drawIsoDiamond(sx, sy, 'rgba(255,255,200,0.15)', 'rgba(255,255,100,0.5)');
+      }
+
+      // Unit highlight (glow on tile if unit is here)
+      for (const u of units) {
+        if (!u.alive) continue;
+        if (Math.round(u.rx) === r.tx && Math.round(u.ry) === r.ty) {
+          const [sx, sy] = isoProject(r.tx, r.ty);
+          const glowColor = u.team === 'red' ? 'rgba(255,80,80,0.12)' : 'rgba(80,120,255,0.12)';
+          drawIsoDiamond(sx, sy, glowColor);
+        }
+      }
+    } else if (r.type === 'building') {
+      const b = r.data;
+      const [sx, sy] = isoProject(b.tx, b.ty);
+      if (sx > -100 && sx < W + 100 && sy > -100 && sy < H + 100) {
+        if (b.type === 'castle') drawCastle(sx, sy);
+        else if (b.type === 'house') drawHouse(sx, sy);
+        else if (b.type === 'wall') drawWall(sx, sy);
+      }
+    } else if (r.type === 'unit') {
+      drawUnit(r.data, time);
+    }
+  }
+
+  // ---- Projectiles (arrows) ----
+  for (const p of projectiles) {
+    const cx = p.sx + (p.tx - p.sx) * p.t;
+    const cy = p.sy + (p.ty - p.sy) * p.t;
+    const arcH = -4 * p.t * (1 - p.t) * 3; // parabolic arc in tile space
+
+    const [sx, sy] = isoProject(cx, cy);
+    const drawY = sy + arcH * HALF_TH;
+
+    // Arrow shaft
+    const angle = Math.atan2(
+      (p.ty - p.sy) * HALF_TH + arcH * HALF_TH,
+      (p.tx - p.sx) * HALF_TW
+    );
+    ctx.save();
+    ctx.translate(sx, drawY);
+    ctx.rotate(angle * 0.5 - 0.3);
+    ctx.strokeStyle = '#8B4513';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-6, 0);
+    ctx.lineTo(6, 0);
+    ctx.stroke();
+    // Arrowhead
+    ctx.fillStyle = '#aaa';
+    ctx.beginPath();
+    ctx.moveTo(6, 0);
+    ctx.lineTo(3, -2);
+    ctx.lineTo(3, 2);
+    ctx.closePath();
+    ctx.fill();
+    // Fletching
+    ctx.fillStyle = '#cc4444';
+    ctx.beginPath();
+    ctx.moveTo(-6, 0);
+    ctx.lineTo(-4, -2);
+    ctx.lineTo(-4, 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // Trail
+    ctx.fillStyle = `rgba(255,200,100,${0.3 * (1-p.t)})`;
+    ctx.beginPath();
+    ctx.arc(sx, drawY, 1.5, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // ---- Combat particles ----
+  for (const p of particles) {
+    const alpha = p.life / p.maxLife;
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * alpha, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // ---- Ambient particles ----
+  for (const p of ambientParticles) {
+    const [sx, sy] = isoProject(p.tx, p.ty);
+    if (sx < -20 || sx > W+20 || sy < -20 || sy > H+20) continue;
+    if (p.type === 'leaf') {
+      const wobble = Math.sin(time * 0.003 + p.phase) * 3;
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = 0.7;
+      ctx.save();
+      ctx.translate(sx + wobble, sy - 10);
+      ctx.rotate(time * 0.002 + p.phase);
+      ctx.fillRect(-2, -1, 4, 2);
+      ctx.restore();
+    } else if (p.type === 'smoke') {
+      const alpha = Math.min(1, p.life / 60) * 0.3;
+      ctx.fillStyle = `rgba(180,170,160,${alpha})`;
+      ctx.beginPath();
+      ctx.arc(sx, sy - 30 + (200 - p.life)*0.15, p.size + (200-p.life)*0.03, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // ---- Day/night tint overlay ----
+  if (dayVal < 0.7) {
+    const nightAlpha = (0.7 - dayVal) * 0.4;
+    ctx.fillStyle = `rgba(10,10,40,${nightAlpha})`;
+    ctx.fillRect(0, 0, W, H);
+
+    // Stars at night
+    if (dayVal < 0.3) {
+      ctx.fillStyle = `rgba(255,255,255,${(0.3 - dayVal) * 2})`;
+      const starSeed = 12345;
+      for (let i = 0; i < 50; i++) {
+        const sx2 = ((starSeed * (i+1) * 7) % W);
+        const sy2 = ((starSeed * (i+1) * 13) % (H * 0.4));
+        const twinkle = Math.sin(time * 0.003 + i) * 0.5 + 0.5;
+        ctx.globalAlpha = twinkle * (0.3 - dayVal) * 2;
+        ctx.beginPath();
+        ctx.arc(sx2, sy2, 0.5 + twinkle, 0, Math.PI*2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // Golden hour tint
+  if (dayVal > 0.6 && dayVal < 0.9) {
+    const goldenAlpha = (1 - Math.abs(dayVal - 0.75) / 0.15) * 0.08;
+    ctx.fillStyle = `rgba(255,180,60,${goldenAlpha})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  ctx.restore();
+
+  // ---- Minimap ----
+  drawMinimap();
+}
+
+// ---- GAME LOOP ----
+let lastTime = 0;
+function loop(time) {
+  const dt = Math.min(time - lastTime, 50);
+  lastTime = time;
+  gameTime = time;
+
+  update(dt);
+  render(time);
+
+  requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

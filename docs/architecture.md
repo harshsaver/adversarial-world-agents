@@ -6,7 +6,7 @@
 +-------------------+       +-------------------+
 |                   |       |                   |
 |   NanoBanana 2    |       |      Lyria        |
-|  (terrain gen)    |       |   (audio gen)     |
+| (frame rendering) |       |   (audio gen)     |
 |                   |       |                   |
 +--------+----------+       +--------+----------+
          |                           |
@@ -14,11 +14,12 @@
 +------------------------------------------------+
 |                                                |
 |           Visual Environment                   |
-|        (Physics Engine @ 60fps)                |
+|     (Babylon.js + Havok Physics @ 60fps)       |
 |                                                |
-|   - HTML Canvas / Three.js / p5.js / Matter.js |
-|   - Obstacles, terrain, units, projectiles     |
-|   - Real-time physics simulation               |
+|   - PBR materials, shadows, particles          |
+|   - Havok physics (AAA-quality WASM)           |
+|   - Recast crowd navigation/pathfinding        |
+|   - Instanced meshes (1000+ units at 144fps)   |
 |                                                |
 +-----+-------------------+---------------------+
       |                   |
@@ -41,34 +42,48 @@
 |          Action Resolver                       |
 |   - Validates actions                          |
 |   - Applies to physics engine                  |
-|   - Resolves conflicts                         |
+|   - Resolves conflicts simultaneously          |
 |                                                |
 +-----+------------------------------------------+
       |
       v
 +------------------------------------------------+
 |                                                |
-|         Structured Logger                      |
-|   - Records game_state per turn                |
-|   - Records agent reasoning                    |
-|   - Records actions + outcomes                 |
-|   - Exports labeled training data              |
+|    Multimodal Training Data Pipeline           |
+|                                                |
+|   1. Structured Logger                         |
+|      - game_state per turn (JSON)              |
+|      - agent reasoning chains                  |
+|      - actions + outcomes                      |
+|                                                |
+|   2. NanoBanana 2 Frame Renderer               |
+|      - Renders game state as photorealistic    |
+|        frame with character consistency         |
+|      - Creates visual training data            |
+|                                                |
+|   3. Lyria Audio Generator                     |
+|      - Generates spatially-aware audio         |
+|      - Creates audio training data             |
+|                                                |
+|   OUTPUT: Aligned multimodal dataset           |
+|   (visual + audio + structured reasoning)      |
 |                                                |
 +------------------------------------------------+
 ```
 
 ## Core Loop
 
-### 1. Physics Engine (60fps)
+### 1. Visual Engine (60fps)
 
-The physics engine runs continuously in the browser at 60 frames per second. It handles:
+The visual engine runs continuously in the browser at 60fps. Recommended stack: **Babylon.js 8.0 + Havok Physics**.
 
+It handles:
 - Unit movement and velocity
 - Collision detection (unit-unit, unit-obstacle, unit-boundary)
-- Projectile physics (if applicable)
+- Projectile physics with gravity arcs
 - Damage calculation
 - Death/removal of units
-- Visual rendering
+- Visual rendering with PBR materials, shadows, particles, post-processing
 
 The physics engine is the source of truth for all world state. It runs independently of the AI agents.
 
@@ -115,38 +130,71 @@ Both agents' actions are resolved simultaneously:
 
 Conflicts are resolved deterministically (e.g., if both agents try to move a unit to the same position, physics handles the collision).
 
-### 5. Structured Logging
+### 5. Multimodal Data Generation
 
-Every turn is logged with full context:
+After each turn, the multimodal pipeline generates aligned training data:
 
-- Complete game state before actions
-- Both agents' reasoning chains
-- Both agents' selected actions
-- Outcome after actions are applied
-- Damage dealt, units lost, territory changed
+**Structured Data (Gemini 3.1)**:
+- Complete game state before/after actions
+- Both agents' full reasoning chains
+- Actions selected + actions rejected (counterfactuals)
+- Outcome measurements
 
-This log is the primary output -- the structured training data.
+**Visual Data (NanoBanana 2)**:
+- Game state rendered as photorealistic frame
+- Character consistency maintained across frames (NanoBanana 2's key feature)
+- Creates the video component of training data
+
+**Audio Data (Lyria)**:
+- Scene-appropriate audio generated per frame
+- Spatially aware (explosions, movement, ambient)
+- Creates the audio component of training data
 
 ## Environment Generation
 
-### NanoBanana 2 (Terrain)
+### NanoBanana 2 (Visuals)
 
-When a user configures a new scenario, NanoBanana 2 generates:
+Two roles:
 
-- Background textures appropriate to the scenario (urban, naval, forest, etc.)
-- Obstacle placement suggestions
-- Visual theming (color palettes, atmospheric effects)
+1. **Scenario Setup**: When a user configures a new scenario, NanoBanana 2 generates terrain textures, unit appearances, obstacle art, and atmospheric effects matching the scenario description.
+
+2. **Frame Rendering**: During simulation, NanoBanana 2 renders each game state as a photorealistic frame. Character consistency ensures units look the same across frames, creating coherent visual training data.
 
 ### Lyria (Audio)
 
-Lyria generates ambient audio per scenario:
+Two roles:
 
-- Urban warfare: distant gunfire, sirens, radio chatter
-- Naval battle: waves, wind, ship engines
-- Cyber attack: electronic hums, data transfer sounds, alarm tones
-- Forest: wildlife, rustling, stream sounds
+1. **Ambient Audio**: Generates continuous background audio matching the scenario (urban warfare sounds, naval waves, cyber hums, forest wildlife).
 
-The audio runs continuously during simulation and adapts to combat intensity.
+2. **Event Audio**: Generates audio for specific events (explosions, impacts, movement) aligned to the visual frames. This creates paired visual-audio training data.
+
+## Recommended Tech Stack
+
+| Component | Technology | Why |
+|-----------|-----------|-----|
+| Visual Engine | Babylon.js 8.0 | PBR, area lights, WebGPU native, 1000+ units at 144fps |
+| Physics | Havok (via Babylon.js) | AAA quality (Halo, Skyrim), WASM |
+| Pathfinding | Recast (via Babylon.js) | Built-in crowd navigation |
+| Game AI | Yuka.js | Steering behaviors, state machines, pursuit/evade/flee |
+| Agent Reasoning | Gemini 3.1 | Structured output, multimodal vision, long context |
+| Visual Generation | NanoBanana 2 | Character consistency, scenario art |
+| Audio Generation | Lyria | Scene-appropriate audio |
+| Frontend | Single HTML file from CDN | Zero build step |
+| Data Export | JSON/JSONL | One line per turn, full multimodal record |
+
+### CDN URLs (no build step)
+
+```html
+<!-- Babylon.js -->
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script src="https://cdn.babylonjs.com/havok/HavokPhysics_umd.js"></script>
+<script src="https://cdn.babylonjs.com/babylon.gui.min.js"></script>
+
+<!-- Yuka.js Game AI -->
+<script type="module">
+import * as YUKA from 'https://cdn.jsdelivr.net/npm/yuka/build/yuka.module.js';
+</script>
+```
 
 ## Data Pipeline
 
@@ -154,28 +202,27 @@ The audio runs continuously during simulation and adapts to combat intensity.
 Simulation Run
       |
       v
-Turn-by-turn JSON logs
+Per-turn multimodal capture:
+  - Structured JSON (game state + reasoning)
+  - NanoBanana 2 frame (photorealistic render)
+  - Lyria audio clip (scene audio)
       |
       v
-Post-processing
+Post-processing:
   - Validate all fields
+  - Align frames + audio + reasoning by timestamp
   - Calculate derived metrics
   - Add outcome attribution
       |
       v
-Training dataset (JSONL)
+Multimodal training dataset (JSONL + frames + audio)
   - One line per turn
+  - Linked visual frames and audio clips
   - Full reasoning + actions + outcomes
-  - Ready for fine-tuning or RLHF
+  - Ready for world model training, fine-tuning, or RLHF
 ```
 
-## Tech Stack
+## Alternative Visual Engines Evaluated
 
-| Component | Technology |
-|-----------|-----------|
-| Physics Engine | Matter.js / Three.js + cannon-es / p5.js / Pure Canvas |
-| AI Agents | Gemini 3.1 (structured output mode) |
-| Terrain Generation | NanoBanana 2 |
-| Audio Generation | Lyria |
-| Frontend | Vanilla HTML/JS (no framework) |
-| Data Export | JSON/JSONL |
+See [`ideas.md`](ideas.md) for the full comparison of 10 visual engines tested:
+Babylon.js, Three.js (basic + advanced), PlayCanvas, WebGPU, PixiJS, Matter.js, p5.js, Canvas, and Isometric Canvas.

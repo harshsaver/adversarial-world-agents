@@ -1,8 +1,8 @@
 # Adversarial World Agents
 
-**Configurable adversarial simulation where two AI agents (Gemini-powered) fight in a visual environment. All actions recorded as structured training data.**
+**Configurable adversarial simulation where two AI agents (Gemini-powered) fight in a visual environment. All actions recorded as structured multimodal training data.**
 
-Built at the **YC x Google DeepMind Multimodal Frontier Hackathon** -- March 7, 2026, San Francisco.
+Built at the **YC x Google DeepMind Multimodal Frontier Hackathon** — March 7, 2026, San Francisco.
 
 ---
 
@@ -14,53 +14,73 @@ The **YC x Google DeepMind Multimodal Frontier Hackathon** brought together buil
 
 | API | Description |
 |-----|-------------|
-| **Gemini 3.1** | Google's latest multimodal foundation model -- vision, reasoning, structured output, function calling |
-| **Lyria** | Google DeepMind's music generation model -- generates ambient audio from text descriptions |
-| **NanoBanana 2** | Image/terrain generation model -- generates visual environments from scenario descriptions |
+| **Gemini 3.1** | Google's latest multimodal foundation model — vision, reasoning, structured output, function calling |
+| **Lyria** | Google DeepMind's music/audio generation model — generates ambient audio from text descriptions |
+| **NanoBanana 2** | Image generation model with character consistency — generates visual environments and consistent unit frames |
 
 ---
 
 ## The Idea
 
-**Adversarial World Agents** is a configurable adversarial simulation platform where two Gemini-powered AI agents engage in combat within a visual physics environment. One agent attacks, one defends. Every decision, action, and outcome is recorded as structured training data with full reasoning annotations.
+**Adversarial World Agents** is a configurable adversarial simulation platform where two Gemini-powered AI agents engage in combat within a visual physics environment. One agent attacks, one defends. Every decision, action, and outcome is recorded as **structured multimodal training data** — visual frames (NanoBanana 2), audio (Lyria), and reasoning chains (Gemini 3.1).
 
-The core insight: **current world models (Cosmos, Genie, Sora) train on passive video with text captions. They have no structured reasoning data. We generate active adversarial decision-making data with causal reasoning chains.**
+### The Core Insight
+
+Current world models (Cosmos, Genie, Sora) train on passive video with text captions. They have:
+- No structured reasoning data
+- No adversarial multi-agent interactions
+- No causal chains explaining *why* things happen
+
+We generate **active adversarial decision-making data with causal reasoning chains** across all modalities — visual, audio, and structured text.
+
+### Multimodal Training Data Factory
+
+This isn't just a Gemini project. All 3 APIs are **core** to the output:
+
+| API | Role | Output |
+|-----|------|--------|
+| **Gemini 3.1** | Drives adversarial agent reasoning | Structured JSON with observation → strategy → risk → action chains |
+| **NanoBanana 2** | Renders each game state as a photorealistic frame | Visual training data with character consistency across frames |
+| **Lyria** | Generates spatially-aware audio per scene state | Audio training data aligned frame-by-frame |
+
+**Result**: A complete multimodal training dataset — annotated video frames + audio + reasoning chains + game state — all aligned and structured.
 
 ### How It Works
 
 ```
-User configures scenario
+User configures scenario (text prompt)
         |
         v
-Environment generated (NanoBanana 2 for terrain, Lyria for ambient audio)
+Environment generated (NanoBanana 2 for terrain/units, Lyria for ambient audio)
         |
         v
 Two Gemini agents spawned (attacker + defender)
         |
         v
-Simultaneous action loop:
-  - Physics engine snapshots state -> JSON
-  - Both agents receive state simultaneously
-  - Both agents return actions with reasoning
-  - Actions applied to physics engine
-  - Structured logger records everything
+Simultaneous action loop (every 1-2 seconds):
+  1. Physics engine snapshots state → JSON
+  2. Both agents receive state simultaneously
+  3. Both return structured actions with reasoning
+  4. Actions applied to physics engine
+  5. NanoBanana 2 renders frame from game state
+  6. Lyria generates audio for scene
+  7. Structured logger records everything
         |
         v
-Winner announced
-        |
-        v
-Structured output with reasoning annotations exported
+Winner announced → Full multimodal dataset exported
 ```
 
-### Architecture Summary
+---
 
-1. **Physics engine** runs at 60fps in the browser
+## Architecture Summary
+
+1. **Visual engine** runs at 60fps in the browser (Babylon.js + Havok physics recommended)
 2. Every **1-2 seconds**: snapshot game state to JSON, send to both Gemini agents simultaneously
-3. Both agents return **structured actions** (move, attack, defend, retreat, etc.)
+3. Both agents return **structured actions** with full reasoning chains
 4. Actions applied to physics engine; loop continues
-5. **Structured logger** records every turn with full reasoning chains
-6. **NanoBanana 2** generates terrain textures per scenario
-7. **Lyria** generates ambient audio per scenario
+5. **NanoBanana 2** renders photorealistic frames from game states (character consistency keeps units visually coherent)
+6. **Lyria** generates spatially-aware audio per scene
+7. **Structured logger** records every turn — the complete multimodal training dataset
 
 ---
 
@@ -109,6 +129,11 @@ Every turn produces a structured JSON record capturing the full adversarial inte
       {"unit": "b3", "action": "attack", "target_unit": "r3"}
     ]
   },
+  "multimodal_outputs": {
+    "frame": "nanobanana_frame_014.png",
+    "audio_clip": "lyria_audio_014.wav",
+    "frame_description": "Red units splitting formation near northern gap, blue defenders repositioning"
+  },
   "outcome": {
     "damage_dealt": {"attacker": 12, "defender": 8},
     "units_lost": {"attacker": 0, "defender": 0},
@@ -120,43 +145,34 @@ Every turn produces a structured JSON record capturing the full adversarial inte
 
 ### Why This Data Matters
 
-This structured output format captures something no existing dataset provides:
+This structured output captures something no existing dataset provides:
 
-- **Strategic reasoning with causal chains** -- not just "what happened" but "why each agent decided what it did"
-- **Adversarial multi-agent interactions** -- two intelligent agents reasoning about each other's behavior
-- **Labeled training data** -- every field is structured and machine-readable, not raw pixels or free-text captions
-- **Counterfactual reasoning** -- the risk assessments capture what agents considered but rejected
-
----
-
-## Validation: Browser Use Hackathon
-
-The winning team at the **Browser Use hackathon** built the exact same concept: adversarial browser agents with structured output for training data. They won **1st place**.
-
-Their approach:
-- Two AI agents in an adversarial setup
-- Structured output capturing reasoning and actions
-- Training data generation as the primary value proposition
-
-This independently validates the core idea. The adversarial agent + structured output paradigm is what judges and the market want.
+- **Strategic reasoning with causal chains** — not just "what happened" but "why each agent decided what it did"
+- **Adversarial multi-agent interactions** — two intelligent agents reasoning about each other's behavior
+- **Multimodal alignment** — visual frames, audio, and structured reasoning all aligned per-turn
+- **Counterfactual reasoning** — the risk assessments capture what agents considered but rejected
 
 ---
 
-## Judge Feedback
+## Validation
 
-The hackathon judges were enthusiastic about this concept. Key feedback:
+### Browser Use Hackathon (1st Place)
 
-> **"Even blobs on a cube would be amazing"** -- a judge emphasizing that the visual fidelity matters less than the adversarial agent interaction and structured data output.
+The winning team at the **Browser Use hackathon** built the exact same concept: adversarial browser agents with structured output for training data. They won **1st place**. This independently validates the adversarial agent + structured output paradigm.
 
-The judges recognized that the training data angle is the real breakthrough -- generating labeled adversarial reasoning data that current world models completely lack.
+### Judge Feedback
+
+> **"Even blobs on a cube would be amazing"** — a judge emphasizing that the adversarial agent interaction and structured data output matter more than visual fidelity.
+
+### PhysicsBox Comparison
+
+We also explored **PhysicsBox** (extracting physics from video → modifying → re-rendering). While PhysicsBox uses all 3 APIs more naturally, the demo risk is higher (NanoBanana must convincingly re-render modified physics). Adversarial Agents wins on demo impact with the "multimodal training data factory" framing making all 3 APIs genuinely essential.
 
 ---
 
-## Training Data Angle
+## Training Data: The Gap We Fill
 
-### The Problem with Current World Models
-
-Every major world model trains on the same limited data:
+### Current World Models
 
 | Model | Training Data | What's Missing |
 |-------|--------------|----------------|
@@ -165,37 +181,60 @@ Every major world model trains on the same limited data:
 | **OpenAI Sora** | Video + text descriptions | No multi-agent adversarial data |
 | **DeepMind Genie 2** | 3D environment trajectories | No causal reasoning annotations |
 
-### What Adversarial World Agents Generates
+### What We Generate
 
 - **Active adversarial decision-making data** (not passive observation)
 - **Causal reasoning chains** per agent per turn
 - **Multi-agent strategic interaction** with structured labels
+- **Photorealistic visual frames** with character consistency (NanoBanana 2)
+- **Spatially-aware audio** aligned to visual frames (Lyria)
 - **Counterfactual analysis** (what was considered, what was rejected, why)
-- **Outcome attribution** (which decisions led to which results)
-
-This is the data that world models need to go from "predicting what the next frame looks like" to "understanding why agents do what they do."
 
 ---
 
 ## Demos
 
-See the [`demos/`](demos/) folder for four interactive physics engine prototypes:
+See the [`demos/`](demos/) folder for **10 interactive visual engine prototypes** exploring different rendering approaches:
 
-- **Matter.js 2D Physics** -- Arena with walls, obstacles, glowing units, collision damage
-- **Three.js + cannon-es 3D** -- Cinematic 3D arena with spheres, shadows, fog
-- **p5.js Bioluminescent Swarm** -- Deep-sea style, steering behaviors, trails
-- **Pure Canvas 2D** -- Zero dependencies, projectiles, minimap, HP bars, 60fps
+### Original Prototypes
+- **`matter_demo.html`** — Matter.js 2D physics, arena combat, collision damage
+- **`threejs_demo.html`** — Three.js + cannon-es 3D, cinematic camera, shadows
+- **`p5_demo.html`** — p5.js bioluminescent deep-sea swarm warfare
+- **`canvas_demo.html`** — Pure Canvas 2D, zero dependencies, projectiles, minimap
+
+### Advanced Engine Comparisons
+- **`babylon_demo.html`** — Babylon.js 8.0 + Havok physics, PBR materials, particles, post-processing
+- **`threejs_advanced_demo.html`** — Advanced Three.js with terrain, water, sky, bloom, instanced units
+- **`playcanvas_demo.html`** — PlayCanvas engine with Ammo.js physics, shadows, skybox
+- **`webgpu_demo.html`** — WebGPU compute shaders, 5000 particles, GPU-driven N-body simulation
+- **`pixi_demo.html`** — PixiJS military C4ISR command center, radar sweep, fog of war, hex grid
+- **`isometric_demo.html`** — Pure Canvas isometric strategy game, terrain types, day/night cycle
 
 Open any HTML file in your browser. No build step needed.
+
+### Recommended Stack
+
+Based on research: **Babylon.js 8.0 + Havok Physics + Yuka.js Game AI** — best visual quality, AAA physics, built-in pathfinding, all from CDN in a single HTML file.
 
 ---
 
 ## Documentation
 
-- [`docs/architecture.md`](docs/architecture.md) -- Technical architecture
-- [`docs/ideas.md`](docs/ideas.md) -- Visual environment options explored
-- [`docs/scenarios.md`](docs/scenarios.md) -- Example configurable scenarios
-- [`docs/research.md`](docs/research.md) -- Research findings and validation
+- [`docs/architecture.md`](docs/architecture.md) — Technical architecture & multimodal pipeline
+- [`docs/ideas.md`](docs/ideas.md) — Visual environment options explored (10 engines compared)
+- [`docs/scenarios.md`](docs/scenarios.md) — Example configurable scenarios
+- [`docs/research.md`](docs/research.md) — Research findings, validation, and multimodal strategy
+
+---
+
+## Team
+
+- **Ayush Kumar** — [@ayushkumarcode](https://github.com/ayushkumarcode)
+- **Harsh Savergaonkar** — [@harshsaver](https://github.com/harshsaver)
+
+### Harsh's Existing Canvases
+- [Polytopia Clone](https://polytopia-seven.vercel.app) — Three.js isometric hex terrain strategy game ([repo](https://github.com/harshsaver/polytopia))
+- [IsoCity](https://isometric-city-swart.vercel.app) — Next.js isometric city builder with simulation ([repo](https://github.com/harshsaver/isometric-city))
 
 ---
 

@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TACTICAL COMMAND CENTER // OPERATION IRON GRID</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.3.2/pixi.min.js"></script>
+<script>window.PIXI || document.write('<script src="pixi.min.js"><\/script>')</script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #000;
+  overflow: hidden;
+  font-family: 'Courier New', monospace;
+  cursor: crosshair;
+}
+canvas { display: block; }
+#scanlines {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 10;
+  background: repeating-linear-gradient(0deg,
+    rgba(0,0,0,0.12) 0px, rgba(0,0,0,0.12) 1px,
+    transparent 1px, transparent 3px);
+}
+#vignette {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 11;
+  background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.7) 100%);
+}
+
+/* HUD */
+#hud-top {
+  position: fixed; top: 0; left: 0; width: 100%; z-index: 20;
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding: 8px 16px; pointer-events: none;
+}
+.hud-panel {
+  background: rgba(0,10,2,0.88);
+  border: 1px solid rgba(0,255,65,0.25);
+  padding: 8px 14px;
+  color: #00ff41;
+  font-size: 11px;
+  line-height: 1.7;
+  text-shadow: 0 0 6px rgba(0,255,65,0.4);
+  min-width: 210px;
+  pointer-events: auto;
+}
+.hud-panel.red-panel {
+  border-color: rgba(255,60,60,0.35);
+  color: #ff4444;
+  text-shadow: 0 0 6px rgba(255,60,60,0.35);
+}
+.hud-panel.blue-panel {
+  border-color: rgba(60,120,255,0.35);
+  color: #4488ff;
+  text-shadow: 0 0 6px rgba(60,120,255,0.35);
+}
+.hud-panel .label {
+  color: rgba(0,255,65,0.45);
+  font-size: 9px; letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.hud-panel.red-panel .label { color: rgba(255,60,60,0.4); }
+.hud-panel.blue-panel .label { color: rgba(60,120,255,0.4); }
+#hud-center { text-align: center; }
+#hud-center .title {
+  font-size: 14px; letter-spacing: 6px;
+  color: #00ff41;
+  text-shadow: 0 0 10px rgba(0,255,65,0.5);
+}
+#hud-center .subtitle {
+  font-size: 9px; letter-spacing: 3px;
+  color: rgba(0,255,65,0.35); margin-top: 2px;
+}
+#timer-display {
+  font-size: 22px; color: #ffaa00;
+  text-shadow: 0 0 12px rgba(255,170,0,0.5);
+  margin-top: 4px;
+}
+#threat-bar {
+  width: 100%; height: 4px;
+  background: rgba(0,255,65,0.08); margin-top: 4px;
+}
+#threat-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #00ff41, #ffaa00, #ff4444);
+  transition: width 0.5s;
+}
+
+/* Kill feed */
+#kill-feed {
+  position: fixed; right: 16px; top: 50%; transform: translateY(-50%);
+  z-index: 20; pointer-events: none; width: 230px;
+}
+#kill-feed .hud-panel { max-height: 300px; overflow: hidden; }
+#kill-feed-list { max-height: 260px; overflow: hidden; }
+.kill-entry {
+  font-size: 10px; padding: 2px 0;
+  border-bottom: 1px solid rgba(0,255,65,0.08);
+}
+
+/* Bottom */
+#hud-bottom {
+  position: fixed; bottom: 0; left: 0; width: 100%; z-index: 20;
+  display: flex; justify-content: space-between; align-items: flex-end;
+  padding: 8px 16px; pointer-events: none;
+}
+#sector-status {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 2px; margin-top: 4px;
+}
+.sector-cell {
+  width: 16px; height: 16px;
+  border: 1px solid rgba(0,255,65,0.15);
+  font-size: 6px;
+  display: flex; align-items: center; justify-content: center;
+  color: rgba(0,255,65,0.35);
+}
+.sector-cell.red { background: rgba(255,0,0,0.15); border-color: rgba(255,0,0,0.25); }
+.sector-cell.blue { background: rgba(0,80,255,0.15); border-color: rgba(0,80,255,0.25); }
+.sector-cell.contested { background: rgba(255,170,0,0.15); border-color: rgba(255,170,0,0.25); }
+
+/* Minimap */
+#minimap-wrap {
+  position: fixed; bottom: 12px; right: 16px; z-index: 20;
+  pointer-events: auto;
+}
+#minimap-wrap .hud-panel { padding: 4px; min-width: 0; }
+#minimap {
+  width: 180px; height: 110px;
+  background: rgba(2,10,4,0.9);
+  border: 1px solid rgba(0,255,65,0.2);
+}
+
+/* Winner overlay */
+#winner-overlay {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  z-index: 100; display: none;
+  justify-content: center; align-items: center;
+  flex-direction: column;
+  background: rgba(0,0,0,0.85);
+  font-family: 'Courier New', monospace;
+}
+#winner-overlay.active { display: flex; }
+#winner-overlay.red-alert { animation: redAlert 0.5s infinite alternate; }
+@keyframes redAlert {
+  0% { background: rgba(80,0,0,0.7); }
+  100% { background: rgba(0,0,0,0.85); }
+}
+#winner-text {
+  font-size: 48px; letter-spacing: 12px;
+  text-shadow: 0 0 30px currentColor;
+  animation: pulse 1s infinite alternate;
+}
+@keyframes pulse {
+  0% { opacity: 0.7; transform: scale(1); }
+  100% { opacity: 1; transform: scale(1.05); }
+}
+#winner-sub {
+  font-size: 14px; letter-spacing: 4px;
+  margin-top: 16px; opacity: 0.6; color: #00ff41;
+}
+</style>
+</head>
+<body>
+<div id="scanlines"></div>
+<div id="vignette"></div>
+
+<div id="hud-top">
+  <div class="hud-panel red-panel">
+    <div class="label">// RED FORCE STATUS</div>
+    <div>UNITS: <span id="red-units">12</span>/12</div>
+    <div>KILLS: <span id="red-kills">0</span></div>
+    <div>FORMATION: <span id="red-formation">ADVANCING</span></div>
+    <div>MORALE: <span id="red-morale">100</span>%</div>
+  </div>
+  <div class="hud-panel" id="hud-center">
+    <div class="title">OPERATION IRON GRID</div>
+    <div class="subtitle">TACTICAL COMMAND INTERFACE v4.7</div>
+    <div id="timer-display">05:00</div>
+    <div class="label" style="margin-top:4px;">THREAT LEVEL</div>
+    <div id="threat-bar"><div id="threat-fill" style="width:30%"></div></div>
+  </div>
+  <div class="hud-panel blue-panel">
+    <div class="label">// BLUE FORCE STATUS</div>
+    <div>UNITS: <span id="blue-units">12</span>/12</div>
+    <div>KILLS: <span id="blue-kills">0</span></div>
+    <div>FORMATION: <span id="blue-formation">DEFENSIVE</span></div>
+    <div>MORALE: <span id="blue-morale">100</span>%</div>
+  </div>
+</div>
+
+<div id="kill-feed">
+  <div class="hud-panel">
+    <div class="label">// COMBAT LOG</div>
+    <div id="kill-feed-list"></div>
+  </div>
+</div>
+
+<div id="hud-bottom">
+  <div class="hud-panel" style="min-width:120px;">
+    <div class="label">// SECTOR CONTROL</div>
+    <div id="sector-status"></div>
+  </div>
+</div>
+
+<div id="minimap-wrap">
+  <div class="hud-panel">
+    <div class="label" style="margin-bottom:4px;">// TACTICAL MAP</div>
+    <canvas id="minimap" width="180" height="110"></canvas>
+  </div>
+</div>
+
+<div id="winner-overlay">
+  <div id="winner-text"></div>
+  <div id="winner-sub">ENGAGEMENT CONCLUDED</div>
+</div>
+
+<script>
+(function() {
+'use strict';
+
+const W = window.innerWidth;
+const H = window.innerHeight;
+
+// ---- PIXI APP ----
+const app = new PIXI.Application({
+  width: W, height: H,
+  backgroundColor: 0x020a04,
+  antialias: true,
+  resolution: 1,
+});
+document.body.insertBefore(app.view, document.body.firstChild);
+
+// ---- CONSTANTS ----
+const GRID = 40;
+const COLS = Math.ceil(W / GRID) + 1;
+const ROWS = Math.ceil(H / GRID) + 1;
+const DURATION = 300;
+const N_UNITS = 12;
+const ATK_RANGE = 160;
+const ATK_CD = 80;
+const UNIT_HP = 100;
+const DMG = 18;
+
+// ---- COLORS ----
+const RED = 0xff3344, RED_DK = 0x991122;
+const BLU = 0x3388ff, BLU_DK = 0x1144aa;
+const GRN = 0x00ff41, AMB = 0xffaa00;
+
+// ---- LAYERS ----
+const L = {};
+['terrain','grid','coords','fog','ranges','connections','trails','units','missiles','explosions','scan','overlay']
+  .forEach(n => { L[n] = new PIXI.Container(); app.stage.addChild(L[n]); });
+
+// ---- TERRAIN ----
+const tMap = [];
+function noise(x,y) { let n = Math.sin(x*12.9898+y*78.233)*43758.5453; return n-Math.floor(n); }
+for (let r=0;r<ROWS;r++) {
+  tMap[r]=[];
+  for (let c=0;c<COLS;c++) {
+    const n = noise(c*0.3, r*0.3);
+    if (Math.abs(r-ROWS/2)<2 && c>COLS*0.3 && c<COLS*0.7 && n>0.4) tMap[r][c]='water';
+    else if (n>0.82) tMap[r][c]='mountain';
+    else if (n>0.55) tMap[r][c]='forest';
+    else tMap[r][c]='plains';
+  }
+}
+
+function drawTerrain() {
+  const g = new PIXI.Graphics();
+  const colors = {plains:0x0a1a0c, mountain:0x1a2a1e, water:0x061828, forest:0x0c2210};
+  for (let r=0;r<ROWS;r++) for (let c=0;c<COLS;c++) {
+    const t = tMap[r][c];
+    g.beginFill(colors[t], 0.85);
+    g.drawRect(c*GRID, r*GRID, GRID, GRID);
+    g.endFill();
+    const cx = c*GRID+GRID/2, cy = r*GRID+GRID/2;
+    if (t==='mountain') {
+      g.lineStyle(1, 0x2a4a2e, 0.4);
+      g.moveTo(cx-8,cy+6); g.lineTo(cx,cy-6); g.lineTo(cx+8,cy+6);
+      g.lineStyle(0);
+    } else if (t==='forest') {
+      g.beginFill(0x0e2a14,0.5);
+      g.drawCircle(cx,cy,4); g.drawCircle(cx-5,cy+3,3); g.drawCircle(cx+5,cy+3,3);
+      g.endFill();
+    } else if (t==='water') {
+      g.lineStyle(1,0x0a3050,0.3);
+      for (let w=0;w<3;w++) {
+        const wx=c*GRID+5+w*12;
+        g.moveTo(wx,cy+w*3-3);
+        g.bezierCurveTo(wx+4,cy+w*3-6,wx+8,cy+w*3,wx+12,cy+w*3-3);
+      }
+      g.lineStyle(0);
+    }
+  }
+  L.terrain.addChild(g);
+}
+
+function drawGrid() {
+  const g = new PIXI.Graphics();
+  g.lineStyle(1, 0x0a2a0e, 0.35);
+  for (let x=0;x<=W+GRID;x+=GRID) { g.moveTo(x,0); g.lineTo(x,H); }
+  for (let y=0;y<=H+GRID;y+=GRID) { g.moveTo(0,y); g.lineTo(W,y); }
+  g.lineStyle(1, 0x0f3f15, 0.25);
+  for (let x=0;x<=W+GRID;x+=GRID*4) { g.moveTo(x,0); g.lineTo(x,H); }
+  for (let y=0;y<=H+GRID;y+=GRID*4) { g.moveTo(0,y); g.lineTo(W,y); }
+  L.grid.addChild(g);
+}
+
+function drawCoords() {
+  const ABC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  for (let c=0;c<Math.min(COLS,26);c+=4) for (let r=0;r<ROWS;r+=4) {
+    const t = new PIXI.Text(ABC[c%26]+(r+1), {fontFamily:'Courier New',fontSize:8,fill:0x1a4a1e});
+    t.x=c*GRID+2; t.y=r*GRID+2; t.alpha=0.5;
+    L.coords.addChild(t);
+  }
+}
+
+// ---- FOG OF WAR (canvas-based overlay) ----
+const fogCanvas = document.createElement('canvas');
+fogCanvas.width = W; fogCanvas.height = H;
+const fogCtx = fogCanvas.getContext('2d');
+const fogTex = PIXI.Texture.from(fogCanvas);
+const fogSprite = new PIXI.Sprite(fogTex);
+fogSprite.alpha = 0.5;
+L.fog.addChild(fogSprite);
+
+function updateFog(units) {
+  fogCtx.fillStyle = 'black';
+  fogCtx.fillRect(0,0,W,H);
+  fogCtx.globalCompositeOperation = 'destination-out';
+  for (const u of units) {
+    if (!u.alive) continue;
+    const grad = fogCtx.createRadialGradient(u.x,u.y,20,u.x,u.y,130);
+    grad.addColorStop(0, 'rgba(0,0,0,1)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    fogCtx.fillStyle = grad;
+    fogCtx.fillRect(u.x-130, u.y-130, 260, 260);
+  }
+  fogCtx.globalCompositeOperation = 'source-over';
+  fogTex.update();
+}
+
+// ---- UNITS ----
+const redTeam = [], blueTeam = [];
+let missiles = [], particles = [];
+let frame = 0, gameTime = DURATION, gameOver = false, redKills = 0, blueKills = 0;
+let shake = 0;
+
+class Unit {
+  constructor(team, idx, x, y) {
+    this.team = team; this.idx = idx;
+    this.id = team[0].toUpperCase()+(idx+1);
+    this.x = x; this.y = y;
+    this.tx = x; this.ty = y;
+    this.vx = 0; this.vy = 0;
+    this.hp = UNIT_HP; this.alive = true;
+    this.cd = Math.floor(Math.random()*40);
+    this.speed = 0.8 + Math.random()*0.4;
+    this.kills = 0;
+
+    const color = team==='red'?RED:BLU;
+    const dk = team==='red'?RED_DK:BLU_DK;
+
+    this.cont = new PIXI.Container();
+    this.cont.x = x; this.cont.y = y;
+
+    // Shape
+    this.shape = new PIXI.Graphics();
+    // Outer glow
+    this.shape.beginFill(color, 0.08);
+    this.shape.drawCircle(0,0,16);
+    this.shape.endFill();
+    // Diamond
+    this.shape.beginFill(dk, 0.8);
+    this.shape.lineStyle(1.5, color, 0.85);
+    this.shape.moveTo(0,-10); this.shape.lineTo(8,0);
+    this.shape.lineTo(0,10); this.shape.lineTo(-8,0);
+    this.shape.closePath(); this.shape.endFill();
+    // Chevron
+    this.shape.lineStyle(1, color, 0.5);
+    this.shape.moveTo(-3,-3); this.shape.lineTo(0,-6); this.shape.lineTo(3,-3);
+    // Dot
+    this.shape.lineStyle(0);
+    this.shape.beginFill(color,0.9); this.shape.drawCircle(0,0,2); this.shape.endFill();
+    this.cont.addChild(this.shape);
+
+    // HP bar
+    this.hpGfx = new PIXI.Graphics();
+    this.cont.addChild(this.hpGfx);
+    this.drawHP();
+
+    // Label
+    const lbl = new PIXI.Text(this.id, {fontFamily:'Courier New',fontSize:7,fill:color});
+    lbl.anchor.set(0.5); lbl.y=16; lbl.alpha=0.6;
+    this.cont.addChild(lbl);
+
+    // Range circle (dashed)
+    this.rangeGfx = new PIXI.Graphics();
+    this.rangeGfx.lineStyle(1, color, 0.06);
+    for (let i=0;i<32;i+=2) {
+      const a1=(i/32)*Math.PI*2, a2=((i+1)/32)*Math.PI*2;
+      this.rangeGfx.moveTo(Math.cos(a1)*ATK_RANGE, Math.sin(a1)*ATK_RANGE);
+      this.rangeGfx.lineTo(Math.cos(a2)*ATK_RANGE, Math.sin(a2)*ATK_RANGE);
+    }
+    L.ranges.addChild(this.rangeGfx);
+
+    this.trails = [];
+    L.units.addChild(this.cont);
+  }
+
+  drawHP() {
+    this.hpGfx.clear();
+    const r = this.hp/UNIT_HP, bw=16;
+    this.hpGfx.beginFill(0x111111,0.6);
+    this.hpGfx.drawRect(-bw/2,-14,bw,2); this.hpGfx.endFill();
+    const hc = r>0.5?0x00ff41:r>0.25?0xffaa00:0xff3333;
+    this.hpGfx.beginFill(hc,0.85);
+    this.hpGfx.drawRect(-bw/2,-14,bw*r,2); this.hpGfx.endFill();
+  }
+
+  hit(dmg, attacker) {
+    if (!this.alive) return;
+    this.hp -= dmg;
+    this.drawHP();
+    if (this.hp<=0) {
+      this.hp=0; this.alive=false;
+      this.cont.visible=false; this.rangeGfx.visible=false;
+      attacker.kills++;
+      spawnBigExplosion(this.x, this.y, this.team==='red'?RED:BLU);
+      addKill(attacker, this);
+    }
+  }
+
+  update() {
+    if (!this.alive) return;
+    if (this.cd>0) this.cd--;
+    const dx=this.tx-this.x, dy=this.ty-this.y;
+    const d=Math.sqrt(dx*dx+dy*dy);
+    if (d>1) {
+      this.vx=(dx/d)*this.speed; this.vy=(dy/d)*this.speed;
+      this.x+=this.vx; this.y+=this.vy;
+      this.shape.rotation = Math.atan2(this.vy,this.vx)+Math.PI/2;
+    } else { this.vx*=0.9; this.vy*=0.9; }
+    this.x=Math.max(25,Math.min(W-25,this.x));
+    this.y=Math.max(70,Math.min(H-50,this.y));
+    this.cont.x=this.x; this.cont.y=this.y;
+    this.rangeGfx.x=this.x; this.rangeGfx.y=this.y;
+
+    // Trail
+    if (d>2 && frame%4===0) {
+      const c = this.team==='red'?RED:BLU;
+      const tr = new PIXI.Graphics();
+      tr.beginFill(c, 0.12);
+      tr.moveTo(0,-5); tr.lineTo(4,0); tr.lineTo(0,5); tr.lineTo(-4,0);
+      tr.closePath(); tr.endFill();
+      tr.x=this.x; tr.y=this.y; tr.rotation=this.shape.rotation;
+      tr._ttl = 25;
+      L.trails.addChild(tr);
+      this.trails.push(tr);
+    }
+  }
+}
+
+// ---- MISSILE ----
+class Missile {
+  constructor(from, to) {
+    this.from=from; this.to=to;
+    this.x=from.x; this.y=from.y;
+    this.ex=to.x; this.ey=to.y;
+    this.spd=5+Math.random()*3;
+    this.alive=true;
+    this.trail=[];
+    this.gfx=new PIXI.Graphics();
+    this.tgfx=new PIXI.Graphics();
+    L.missiles.addChild(this.tgfx);
+    L.missiles.addChild(this.gfx);
+  }
+  update() {
+    if (!this.alive) return;
+    if (this.to.alive) { this.ex=this.to.x; this.ey=this.to.y; }
+    const dx=this.ex-this.x, dy=this.ey-this.y;
+    const d=Math.sqrt(dx*dx+dy*dy);
+    if (d<8) {
+      this.alive=false;
+      this.to.hit(DMG, this.from);
+      spawnSmallExplosion(this.x,this.y);
+      this.gfx.destroy(); this.tgfx.destroy();
+      return;
+    }
+    this.x+=(dx/d)*this.spd; this.y+=(dy/d)*this.spd;
+    this.trail.push({x:this.x,y:this.y,l:12});
+    if (this.trail.length>16) this.trail.shift();
+
+    this.gfx.clear();
+    this.gfx.beginFill(AMB,1); this.gfx.drawCircle(this.x,this.y,2.5); this.gfx.endFill();
+    this.gfx.beginFill(AMB,0.15); this.gfx.drawCircle(this.x,this.y,7); this.gfx.endFill();
+
+    this.tgfx.clear();
+    for (let i=0;i<this.trail.length;i++) {
+      const t=this.trail[i];
+      const a=(i/this.trail.length)*0.4;
+      this.tgfx.beginFill(AMB,a);
+      this.tgfx.drawCircle(t.x,t.y,(i/this.trail.length)*2);
+      this.tgfx.endFill();
+      t.l--;
+    }
+    this.trail=this.trail.filter(t=>t.l>0);
+
+    if (this.x<-60||this.x>W+60||this.y<-60||this.y>H+60) {
+      this.alive=false; this.gfx.destroy(); this.tgfx.destroy();
+    }
+  }
+}
+
+// ---- PARTICLES ----
+function spawnBigExplosion(x,y,color) {
+  for (let i=0;i<120;i++) {
+    const a=Math.random()*Math.PI*2;
+    const s=2+Math.random()*6;
+    particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,
+      life:30+Math.random()*35, maxLife:65, color,
+      size:1+Math.random()*3.5, type:Math.random()>0.7?'spark':'debris'});
+  }
+  // Ring
+  for (let i=0;i<28;i++) {
+    const a=(i/28)*Math.PI*2;
+    particles.push({x,y,vx:Math.cos(a)*4.5,vy:Math.sin(a)*4.5,
+      life:18,maxLife:18,color:0xffffff,size:1.5,type:'ring'});
+  }
+  shake=12;
+}
+
+function spawnSmallExplosion(x,y) {
+  for (let i=0;i<12;i++) {
+    const a=Math.random()*Math.PI*2;
+    const s=1+Math.random()*2.5;
+    particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,
+      life:12+Math.random()*15,maxLife:27,color:AMB,size:0.5+Math.random()*1.5,type:'debris'});
+  }
+}
+
+function updateParticles() {
+  L.explosions.removeChildren();
+  if (particles.length===0) return;
+  const g=new PIXI.Graphics();
+  for (let i=particles.length-1;i>=0;i--) {
+    const p=particles[i];
+    p.x+=p.vx; p.y+=p.vy;
+    p.vx*=0.96; p.vy*=0.96; p.vy+=0.02;
+    p.life--;
+    if (p.life<=0) { particles.splice(i,1); continue; }
+    const lr=p.life/p.maxLife;
+    if (p.type==='ring') {
+      g.beginFill(p.color,lr*0.5); g.drawCircle(p.x,p.y,1.5); g.endFill();
+    } else if (p.type==='spark') {
+      g.lineStyle(1,p.color,lr*0.7);
+      g.moveTo(p.x,p.y); g.lineTo(p.x-p.vx*3,p.y-p.vy*3);
+      g.lineStyle(0);
+    } else {
+      g.beginFill(p.color,lr*0.6);
+      g.drawRect(p.x-p.size*lr/2, p.y-p.size*lr/2, p.size*lr, p.size*lr);
+      g.endFill();
+    }
+  }
+  L.explosions.addChild(g);
+}
+
+// ---- SCAN EFFECT ----
+let scanA_R=0, scanA_B=Math.PI;
+const baseR={x:40,y:H/2}, baseB={x:W-40,y:H/2};
+
+function drawScan() {
+  L.scan.removeChildren();
+  const g=new PIXI.Graphics();
+  scanA_R+=0.015; scanA_B+=0.015;
+  const len=300;
+
+  // Red radar
+  g.lineStyle(2,RED,0.12);
+  g.moveTo(baseR.x,baseR.y);
+  g.lineTo(baseR.x+Math.cos(scanA_R)*len, baseR.y+Math.sin(scanA_R)*len);
+  for (let i=1;i<=6;i++) {
+    const a=scanA_R-i*0.05;
+    g.lineStyle(1,RED,0.015*(6-i));
+    g.moveTo(baseR.x,baseR.y);
+    g.lineTo(baseR.x+Math.cos(a)*len, baseR.y+Math.sin(a)*len);
+  }
+  g.lineStyle(1,RED,0.05);
+  for (let r=60;r<=300;r+=60) g.drawCircle(baseR.x,baseR.y,r);
+
+  // Blue radar
+  g.lineStyle(2,BLU,0.12);
+  g.moveTo(baseB.x,baseB.y);
+  g.lineTo(baseB.x+Math.cos(scanA_B)*len, baseB.y+Math.sin(scanA_B)*len);
+  for (let i=1;i<=6;i++) {
+    const a=scanA_B-i*0.05;
+    g.lineStyle(1,BLU,0.015*(6-i));
+    g.moveTo(baseB.x,baseB.y);
+    g.lineTo(baseB.x+Math.cos(a)*len, baseB.y+Math.sin(a)*len);
+  }
+  g.lineStyle(1,BLU,0.05);
+  for (let r=60;r<=300;r+=60) g.drawCircle(baseB.x,baseB.y,r);
+
+  L.scan.addChild(g);
+}
+
+// ---- CONNECTION LINES ----
+function drawConnections() {
+  L.connections.removeChildren();
+  const g=new PIXI.Graphics();
+  function drawTeam(team,color) {
+    const alive=team.filter(u=>u.alive);
+    for (let i=0;i<alive.length;i++) for (let j=i+1;j<alive.length;j++) {
+      const d=Math.hypot(alive[i].x-alive[j].x, alive[i].y-alive[j].y);
+      if (d<180) {
+        g.lineStyle(1,color,(1-d/180)*0.12);
+        g.moveTo(alive[i].x,alive[i].y);
+        g.lineTo(alive[j].x,alive[j].y);
+      }
+    }
+  }
+  drawTeam(redTeam,RED); drawTeam(blueTeam,BLU);
+  L.connections.addChild(g);
+}
+
+// ---- OVERLAY ----
+function drawOverlay() {
+  L.overlay.removeChildren();
+  const g=new PIXI.Graphics();
+  // Pulsing border
+  const pa=0.04+Math.sin(frame*0.03)*0.02;
+  g.lineStyle(2,GRN,pa); g.drawRect(4,4,W-8,H-8);
+  // Corner brackets
+  const bs=30;
+  g.lineStyle(2,GRN,0.25);
+  g.moveTo(2,bs); g.lineTo(2,2); g.lineTo(bs,2);
+  g.moveTo(W-bs,2); g.lineTo(W-2,2); g.lineTo(W-2,bs);
+  g.moveTo(2,H-bs); g.lineTo(2,H-2); g.lineTo(bs,H-2);
+  g.moveTo(W-bs,H-2); g.lineTo(W-2,H-2); g.lineTo(W-2,H-bs);
+  // Crosshair center
+  const cx=W/2,cy=H/2;
+  g.lineStyle(1,GRN,0.06);
+  g.moveTo(cx-30,cy); g.lineTo(cx-10,cy);
+  g.moveTo(cx+10,cy); g.lineTo(cx+30,cy);
+  g.moveTo(cx,cy-30); g.lineTo(cx,cy-10);
+  g.moveTo(cx,cy+10); g.lineTo(cx,cy+30);
+  L.overlay.addChild(g);
+
+  // Bottom text
+  const ct=new PIXI.Text(
+    `LAT 38.8977 N  LON 77.0365 W  ALT 0m  GRID ${COLS}x${ROWS}  ZOOM 1.0x`,
+    {fontFamily:'Courier New',fontSize:9,fill:GRN}
+  );
+  ct.anchor.set(0.5); ct.x=W/2; ct.y=H-22; ct.alpha=0.25;
+  L.overlay.addChild(ct);
+
+  const allAlive = redTeam.filter(u=>u.alive).length+blueTeam.filter(u=>u.alive).length;
+  const ft=new PIXI.Text(
+    `FRM:${frame}  OBJ:${missiles.length+allAlive}  PRT:${particles.length}`,
+    {fontFamily:'Courier New',fontSize:8,fill:GRN}
+  );
+  ft.x=10; ft.y=H-22; ft.alpha=0.2;
+  L.overlay.addChild(ft);
+}
+
+// ---- AI ----
+function aiUpdate() {
+  const rAlive = redTeam.filter(u=>u.alive);
+  const bAlive = blueTeam.filter(u=>u.alive);
+  if (!rAlive.length || !bAlive.length) return;
+
+  const rCen = {x:rAlive.reduce((s,u)=>s+u.x,0)/rAlive.length, y:rAlive.reduce((s,u)=>s+u.y,0)/rAlive.length};
+  const bCen = {x:bAlive.reduce((s,u)=>s+u.x,0)/bAlive.length, y:bAlive.reduce((s,u)=>s+u.y,0)/bAlive.length};
+
+  // Red: advance
+  for (const u of rAlive) {
+    let near=null, nd=Infinity;
+    for (const e of bAlive) { const d=Math.hypot(u.x-e.x,u.y-e.y); if(d<nd){nd=d;near=e;} }
+    if (nd<ATK_RANGE) {
+      if (u.cd<=0) { missiles.push(new Missile(u,near)); u.cd=ATK_CD+Math.floor(Math.random()*25); }
+      u.tx=u.x+(near.x-u.x)*0.01; u.ty=u.y+(near.y-u.y)*0.01;
+    } else {
+      const fx=(u.idx%3-1)*60, fy=(Math.floor(u.idx/3)-2)*60;
+      u.tx=bCen.x-200+fx+Math.sin(frame*0.01+u.idx)*20;
+      u.ty=bCen.y+fy+Math.cos(frame*0.012+u.idx)*15;
+    }
+    avoidBadTerrain(u);
+  }
+
+  // Blue: defend, counterattack
+  for (const u of bAlive) {
+    let near=null, nd=Infinity;
+    for (const e of rAlive) { const d=Math.hypot(u.x-e.x,u.y-e.y); if(d<nd){nd=d;near=e;} }
+    if (nd<ATK_RANGE) {
+      if (u.cd<=0) { missiles.push(new Missile(u,near)); u.cd=ATK_CD+Math.floor(Math.random()*25); }
+      if (nd<ATK_RANGE*0.5) { u.tx=u.x+(u.x-near.x)*0.02; u.ty=u.y+(u.y-near.y)*0.02; }
+    } else {
+      const dx=W*0.62+(u.idx%3-1)*55;
+      const dy=H*0.2+Math.floor(u.idx/3)*(H*0.15);
+      u.tx=dx+Math.sin(frame*0.008+u.idx*0.5)*25;
+      u.ty=dy+Math.cos(frame*0.01+u.idx*0.7)*20;
+      if (rAlive.length < bAlive.length*0.7) {
+        u.tx=rCen.x+(u.idx%3-1)*50; u.ty=rCen.y+(Math.floor(u.idx/3)-2)*50;
+      }
+    }
+    avoidBadTerrain(u);
+  }
+}
+
+function avoidBadTerrain(u) {
+  const gc=Math.floor(u.tx/GRID), gr=Math.floor(u.ty/GRID);
+  if (gr>=0&&gr<ROWS&&gc>=0&&gc<COLS) {
+    const t=tMap[gr][gc];
+    if (t==='water'||t==='mountain') {
+      u.tx=u.x+(Math.random()-0.5)*40;
+      u.ty=u.y+(Math.random()-0.5)*40;
+    }
+  }
+}
+
+// ---- INIT UNITS ----
+for (let i=0;i<N_UNITS;i++) {
+  const row=Math.floor(i/3), col=i%3;
+  redTeam.push(new Unit('red',i, 80+col*50+(row%2)*25, H*0.2+row*(H*0.15)));
+}
+for (let i=0;i<N_UNITS;i++) {
+  const row=Math.floor(i/3), col=i%3;
+  blueTeam.push(new Unit('blue',i, W-80-col*50-(row%2)*25, H*0.2+row*(H*0.15)));
+}
+
+// ---- KILL FEED ----
+function addKill(atk, vic) {
+  const list=document.getElementById('kill-feed-list');
+  const e=document.createElement('div');
+  e.className='kill-entry';
+  const ac=atk.team==='red'?'#ff4444':'#4488ff';
+  const vc=vic.team==='red'?'#ff4444':'#4488ff';
+  e.innerHTML=`<span style="color:${ac}">${atk.id}</span> <span style="color:#00ff41">&gt;&gt;</span> <span style="color:${vc}">${vic.id}</span>`;
+  list.insertBefore(e,list.firstChild);
+  if (list.children.length>15) list.removeChild(list.lastChild);
+  if (atk.team==='red') redKills++; else blueKills++;
+}
+
+// ---- MINIMAP ----
+const mmCanvas=document.getElementById('minimap');
+const mmCtx=mmCanvas.getContext('2d');
+function updateMinimap() {
+  mmCtx.fillStyle='#020a04'; mmCtx.fillRect(0,0,180,110);
+  mmCtx.strokeStyle='rgba(0,255,65,0.15)'; mmCtx.lineWidth=0.5;
+  for (let x=0;x<180;x+=22) { mmCtx.beginPath(); mmCtx.moveTo(x,0); mmCtx.lineTo(x,110); mmCtx.stroke(); }
+  for (let y=0;y<110;y+=18) { mmCtx.beginPath(); mmCtx.moveTo(0,y); mmCtx.lineTo(180,y); mmCtx.stroke(); }
+  const sx=180/W, sy=110/H;
+  for (const u of redTeam) {
+    if (!u.alive) continue;
+    mmCtx.fillStyle='#ff3344'; mmCtx.fillRect(u.x*sx-2,u.y*sy-2,4,4);
+  }
+  for (const u of blueTeam) {
+    if (!u.alive) continue;
+    mmCtx.fillStyle='#3388ff'; mmCtx.fillRect(u.x*sx-2,u.y*sy-2,4,4);
+  }
+  for (const m of missiles) {
+    if (!m.alive) continue;
+    mmCtx.fillStyle='#ffaa00'; mmCtx.fillRect(m.x*sx-1,m.y*sy-1,2,2);
+  }
+}
+
+// ---- SECTOR STATUS ----
+function updateSectors() {
+  const c=document.getElementById('sector-status');
+  c.innerHTML='';
+  const ABC='ABCD';
+  for (let r=0;r<4;r++) for (let cl=0;cl<4;cl++) {
+    const cell=document.createElement('div');
+    cell.className='sector-cell';
+    cell.textContent=ABC[cl]+(r+1);
+    let rc=0,bc=0;
+    const sw=W/4, sh=H/4;
+    for (const u of redTeam) if(u.alive&&u.x>=cl*sw&&u.x<(cl+1)*sw&&u.y>=r*sh&&u.y<(r+1)*sh) rc++;
+    for (const u of blueTeam) if(u.alive&&u.x>=cl*sw&&u.x<(cl+1)*sw&&u.y>=r*sh&&u.y<(r+1)*sh) bc++;
+    if(rc&&bc) cell.classList.add('contested');
+    else if(rc) cell.classList.add('red');
+    else if(bc) cell.classList.add('blue');
+    c.appendChild(cell);
+  }
+}
+
+// ---- HUD ----
+function updateHUD() {
+  const ra=redTeam.filter(u=>u.alive).length;
+  const ba=blueTeam.filter(u=>u.alive).length;
+  document.getElementById('red-units').textContent=ra;
+  document.getElementById('blue-units').textContent=ba;
+  document.getElementById('red-kills').textContent=redKills;
+  document.getElementById('blue-kills').textContent=blueKills;
+  const rm=Math.min(100,Math.max(0,Math.round((ra/N_UNITS)*100-redKills*2+blueKills*3)));
+  const bm=Math.min(100,Math.max(0,Math.round((ba/N_UNITS)*100-blueKills*2+redKills*3)));
+  document.getElementById('red-morale').textContent=rm;
+  document.getElementById('blue-morale').textContent=bm;
+  const rcx=redTeam.filter(u=>u.alive).reduce((s,u)=>s+u.x,0)/(ra||1);
+  document.getElementById('red-formation').textContent=rcx>W*0.4?'ENGAGED':'ADVANCING';
+  document.getElementById('blue-formation').textContent=ba<ra?'RETREATING':'DEFENSIVE';
+  const m=Math.floor(gameTime/60), s=Math.floor(gameTime%60);
+  const td=document.getElementById('timer-display');
+  td.textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  if(gameTime<30){td.style.color='#ff3333';td.style.textShadow='0 0 12px rgba(255,50,50,0.6)';}
+  else if(gameTime<60){td.style.color='#ffaa00';}
+  const tp=Math.min(100,(redKills+blueKills)*5+(N_UNITS*2-ra-ba)*4);
+  document.getElementById('threat-fill').style.width=tp+'%';
+}
+
+// ---- WINNER ----
+function checkWinner() {
+  if (gameOver) return;
+  const ra=redTeam.filter(u=>u.alive).length;
+  const ba=blueTeam.filter(u=>u.alive).length;
+  let w=null;
+  if (!ra) w='blue'; else if (!ba) w='red';
+  else if (gameTime<=0) w=redKills>blueKills?'red':(blueKills>redKills?'blue':'draw');
+  if (w) {
+    gameOver=true;
+    const ov=document.getElementById('winner-overlay');
+    const tx=document.getElementById('winner-text');
+    ov.classList.add('active');
+    if(w==='draw'){tx.textContent='STALEMATE';tx.style.color='#ffaa00';ov.classList.add('red-alert');}
+    else if(w==='red'){tx.textContent='RED VICTORY';tx.style.color='#ff4444';ov.classList.add('red-alert');}
+    else{tx.textContent='BLUE VICTORY';tx.style.color='#4488ff';}
+    document.getElementById('winner-sub').textContent=
+      `FINAL SCORE: RED ${redKills} - ${blueKills} BLUE // ENGAGEMENT CONCLUDED`;
+  }
+}
+
+// ---- TRAIL CLEANUP ----
+function cleanTrails() {
+  for (const team of [redTeam,blueTeam]) for (const u of team) {
+    for (let i=u.trails.length-1;i>=0;i--) {
+      const t=u.trails[i]; t._ttl--;
+      t.alpha=(t._ttl/25)*0.12;
+      if(t._ttl<=0){t.destroy();u.trails.splice(i,1);}
+    }
+  }
+}
+
+// ---- MAIN LOOP ----
+drawTerrain(); drawGrid(); drawCoords();
+const allUnits=[...redTeam,...blueTeam];
+updateFog(allUnits); updateMinimap(); updateSectors(); updateHUD();
+
+app.ticker.add((delta) => {
+  frame++;
+  if (!gameOver) {
+    gameTime -= delta/60;
+    if (gameTime<0) gameTime=0;
+    if (frame%30===0) aiUpdate();
+    for (const u of allUnits) u.update();
+    for (let i=missiles.length-1;i>=0;i--) {
+      missiles[i].update();
+      if(!missiles[i].alive) missiles.splice(i,1);
+    }
+  }
+  cleanTrails();
+  updateParticles();
+  if (shake>0) {
+    app.stage.x=(Math.random()-0.5)*shake;
+    app.stage.y=(Math.random()-0.5)*shake;
+    shake*=0.85;
+    if(shake<0.5){shake=0;app.stage.x=0;app.stage.y=0;}
+  }
+  drawScan();
+  drawConnections();
+  drawOverlay();
+  if (frame%20===0) {
+    updateFog(allUnits);
+    updateMinimap();
+    updateSectors();
+    updateHUD();
+    checkWinner();
+  }
+});
+
+// Label blink
+setInterval(()=>{
+  document.querySelectorAll('.hud-panel .label').forEach(p=>{
+    p.style.opacity=p.style.opacity==='0.3'?'1':'0.3';
+  });
+},1500);
+
+})();
+</script>
+</body>
+</html>

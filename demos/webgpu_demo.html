@@ -1,0 +1,1159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebGPU Nebula War — Adversarial Particle Simulation</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    color: #fff;
+    font-family: 'Courier New', monospace;
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+  }
+  #gpu-canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+  }
+  #hud-canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+  #fallback {
+    display: none;
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    max-width: 600px;
+    padding: 40px;
+    border: 1px solid #333;
+    background: rgba(10,10,10,0.95);
+    border-radius: 12px;
+  }
+  #fallback h1 { color: #f44; margin-bottom: 16px; font-size: 24px; }
+  #fallback p { color: #aaa; line-height: 1.6; margin-bottom: 12px; }
+  #fallback a { color: #4af; }
+  #winner-overlay {
+    display: none;
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    padding: 40px 60px;
+    border-radius: 16px;
+    background: rgba(0,0,0,0.85);
+    border: 2px solid #fff;
+    pointer-events: none;
+    z-index: 10;
+    backdrop-filter: blur(8px);
+  }
+  #winner-overlay h1 { font-size: 48px; margin-bottom: 8px; letter-spacing: 4px; }
+  #winner-overlay p { font-size: 18px; color: #ccc; }
+</style>
+</head>
+<body>
+<canvas id="gpu-canvas"></canvas>
+<canvas id="hud-canvas"></canvas>
+<div id="fallback">
+  <h1>WebGPU Not Available</h1>
+  <p>This demo requires <strong>WebGPU</strong>, a next-generation graphics API for the web.</p>
+  <p>WebGPU enables GPU compute shaders that power this 5000-particle battle simulation at 60fps.</p>
+  <p>Supported in <strong>Chrome 113+</strong>, <strong>Edge 113+</strong>, and <strong>Safari 18+</strong>.</p>
+  <p>Please open this page in <a href="https://www.google.com/chrome/" target="_blank">Google Chrome</a> (version 113 or later).</p>
+</div>
+<div id="winner-overlay">
+  <h1 id="winner-text"></h1>
+  <p id="winner-sub"></p>
+</div>
+
+<script>
+// ============================================================
+// WebGPU Nebula War — Adversarial Particle Battle Simulation
+// 5000 particles, GPU compute shaders, additive blending,
+// instanced quads with soft glow, trails via frame accumulation
+// ============================================================
+
+const NUM_PARTICLES = 5000;
+const PARTICLES_PER_TEAM = NUM_PARTICLES / 2;
+const WORKGROUP_SIZE = 64;
+const BATTLE_DURATION = 60;
+const STAR_COUNT = 500;
+
+// Particle struct: 16 floats = 64 bytes (nice alignment)
+// [posX, posY, velX, velY, team, hp, state, size, age, trailX, trailY, energy, r1, r2, r3, r4]
+const PARTICLE_FLOATS = 16;
+const PARTICLE_BYTES = PARTICLE_FLOATS * 4;
+
+// ---- WGSL: Compute Shader (Physics + AI) ----
+const computeShaderCode = /* wgsl */`
+
+struct Particle {
+  pos: vec2<f32>,
+  vel: vec2<f32>,
+  team: f32,
+  hp: f32,
+  state: f32,
+  size: f32,
+  age: f32,
+  trail: vec2<f32>,
+  energy: f32,
+  r1: f32,
+  r2: f32,
+  r3: f32,
+  r4: f32,
+};
+
+struct SimParams {
+  deltaTime: f32,
+  time: f32,
+  numParticles: f32,
+  phase: f32,
+  mouseX: f32,
+  mouseY: f32,
+  pad2: f32,
+  pad3: f32,
+};
+
+@group(0) @binding(0) var<storage, read> particlesIn: array<Particle>;
+@group(0) @binding(1) var<storage, read_write> particlesOut: array<Particle>;
+@group(0) @binding(2) var<uniform> params: SimParams;
+
+fn hash(n: u32) -> f32 {
+  var x = n;
+  x = ((x >> 16u) ^ x) * 0x45d9f3bu;
+  x = ((x >> 16u) ^ x) * 0x45d9f3bu;
+  x = (x >> 16u) ^ x;
+  return f32(x & 0x7fffffffu) / f32(0x7fffffff);
+}
+
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let idx = gid.x;
+  let total = u32(params.numParticles);
+  if (idx >= total) { return; }
+
+  var p = particlesIn[idx];
+
+  // Dead particles remain dead
+  if (p.state >= 2.0) {
+    particlesOut[idx] = p;
+    return;
+  }
+
+  // Dying particles: drift and shrink
+  if (p.state >= 1.0) {
+    p.age += params.deltaTime;
+    p.size = max(0.0, p.size - params.deltaTime * 2.5);
+    p.vel *= 0.96;
+    p.energy = max(0.0, p.energy - params.deltaTime * 2.0);
+    // Spiral outward as they die
+    let spin = vec2<f32>(-p.vel.y, p.vel.x) * 0.3;
+    p.vel += spin * params.deltaTime;
+    p.trail = p.pos;
+    p.pos += p.vel * params.deltaTime;
+    if (p.size <= 0.2 || p.age > 2.0) {
+      p.state = 2.0;
+      p.size = 0.0;
+    }
+    particlesOut[idx] = p;
+    return;
+  }
+
+  let dt = params.deltaTime;
+  let myTeam = p.team;
+  let time = params.time;
+
+  // Save trail position (previous pos)
+  p.trail = p.pos;
+
+  // ---- Neighbor scan with spatial logic ----
+  var sepForce = vec2<f32>(0.0);
+  var alignForce = vec2<f32>(0.0);
+  var cohesionPos = vec2<f32>(0.0);
+  var nearbyAllies: f32 = 0.0;
+
+  var nearestEnemyDist: f32 = 99.0;
+  var nearestEnemyPos = vec2<f32>(0.0);
+  var nearestEnemyVel = vec2<f32>(0.0);
+  var nearbyEnemies: f32 = 0.0;
+  var enemyCenterOfMass = vec2<f32>(0.0);
+  var totalDmgTaken: f32 = 0.0;
+
+  let PERCEPTION = 0.18;
+  let COMBAT_RANGE = 0.045;
+  let SEP_DIST = 0.02;
+
+  // Stride-based sampling for performance (every 1st particle checked)
+  for (var j: u32 = 0u; j < total; j += 1u) {
+    if (j == idx) { continue; }
+    let other = particlesIn[j];
+    if (other.state >= 1.5) { continue; }
+
+    let diff = p.pos - other.pos;
+    let distSq = dot(diff, diff);
+
+    if (distSq > PERCEPTION * PERCEPTION || distSq < 0.000001) { continue; }
+
+    let dist = sqrt(distSq);
+
+    if (other.team == myTeam) {
+      if (other.state < 1.0) {
+        // Separation (stronger at close range)
+        if (dist < SEP_DIST) {
+          sepForce += diff / (distSq + 0.0001) * 0.003;
+        }
+        alignForce += other.vel;
+        cohesionPos += other.pos;
+        nearbyAllies += 1.0;
+      }
+    } else {
+      if (other.state < 1.0) {
+        nearbyEnemies += 1.0;
+        enemyCenterOfMass += other.pos;
+        if (dist < nearestEnemyDist) {
+          nearestEnemyDist = dist;
+          nearestEnemyPos = other.pos;
+          nearestEnemyVel = other.vel;
+        }
+        // Combat damage: proximity-based
+        if (dist < COMBAT_RANGE) {
+          let seed = idx * 7919u + j * 104729u + u32(time * 60.0);
+          let dmgRoll = hash(seed);
+          totalDmgTaken += dt * (3.0 + dmgRoll * 4.0);
+        }
+      }
+    }
+  }
+
+  var accel = vec2<f32>(0.0);
+
+  // ---- Flocking Forces (allies) ----
+  if (nearbyAllies > 0.0) {
+    let avgVel = alignForce / nearbyAllies;
+    accel += (avgVel - p.vel) * 0.08;  // alignment
+
+    let avgPos = cohesionPos / nearbyAllies;
+    accel += (avgPos - p.pos) * 1.2;   // cohesion
+  }
+  accel += sepForce * 3.0;
+
+  // ---- Strategic Objective ----
+  // Phase-dependent: swarms converge toward center then swirl
+  let phase = params.phase;  // 0..1 over battle duration
+  let centerPull = 0.2 + phase * 0.3;  // stronger center pull over time
+
+  // Team objectives: converge toward the center battlefield
+  var objective: vec2<f32>;
+  if (myTeam < 0.5) {
+    // Red: start left, push right
+    let ox = mix(-0.3, 0.1, min(phase * 2.0, 1.0));
+    objective = vec2<f32>(ox, sin(time * 0.5) * 0.15);
+  } else {
+    // Blue: start right, push left
+    let ox = mix(0.3, -0.1, min(phase * 2.0, 1.0));
+    objective = vec2<f32>(ox, cos(time * 0.5) * 0.15);
+  }
+  let toObj = objective - p.pos;
+  let objDist = length(toObj);
+  if (objDist > 0.01) {
+    accel += normalize(toObj) * centerPull;
+  }
+
+  // ---- Swirling orbital motion for visual beauty ----
+  let orbitRadius = length(p.pos);
+  let swirlStrength = 0.2 + phase * 0.15;
+  let swirl = vec2<f32>(-p.pos.y, p.pos.x) * swirlStrength;
+  accel += swirl;
+
+  // ---- Enemy engagement ----
+  if (nearbyEnemies > 0.0) {
+    let enemyCenter = enemyCenterOfMass / nearbyEnemies;
+
+    if (nearestEnemyDist < COMBAT_RANGE * 1.5) {
+      // Close combat: orbit the enemy
+      let toEnemy = nearestEnemyPos - p.pos;
+      let tangent = vec2<f32>(-toEnemy.y, toEnemy.x);
+      accel += normalize(tangent) * 2.0;
+      accel += normalize(toEnemy) * 0.5;
+      p.energy = min(3.0, p.energy + dt * 5.0);
+    } else if (nearestEnemyDist < PERCEPTION) {
+      // Approach: charge at enemy center
+      let toEnemy = enemyCenter - p.pos;
+      if (length(toEnemy) > 0.01) {
+        accel += normalize(toEnemy) * 1.5;
+      }
+      p.energy = min(2.0, p.energy + dt * 2.0);
+    }
+  } else {
+    p.energy = max(0.0, p.energy - dt * 1.0);
+  }
+
+  // ---- Flee when badly outnumbered ----
+  if (nearbyEnemies > nearbyAllies * 2.0 + 3.0 && nearbyAllies < 3.0) {
+    let flee = p.pos - enemyCenterOfMass / max(nearbyEnemies, 1.0);
+    if (length(flee) > 0.001) {
+      accel += normalize(flee) * 1.5;
+    }
+  }
+
+  // ---- Random jitter (hash-based) ----
+  let seed = idx * 999979u + u32(time * 300.0);
+  let jx = (hash(seed) - 0.5) * 2.0;
+  let jy = (hash(seed + 1u) - 0.5) * 2.0;
+  accel += vec2<f32>(jx, jy) * 0.3;
+
+  // ---- Integration ----
+  p.vel += accel * dt;
+
+  // Speed limit
+  let speed = length(p.vel);
+  let maxSpeed = 0.6;
+  if (speed > maxSpeed) {
+    p.vel = p.vel * (maxSpeed / speed);
+  }
+
+  // Damping
+  p.vel *= 0.985;
+
+  p.pos += p.vel * dt;
+
+  // ---- Boundary: tighter arena, strong soft walls ----
+  let bound = 0.75;
+  let wallForce = 8.0;
+  if (p.pos.x < -bound) { p.vel.x += (-bound - p.pos.x) * wallForce; }
+  if (p.pos.x >  bound) { p.vel.x += ( bound - p.pos.x) * wallForce; }
+  if (p.pos.y < -bound) { p.vel.y += (-bound - p.pos.y) * wallForce; }
+  if (p.pos.y >  bound) { p.vel.y += ( bound - p.pos.y) * wallForce; }
+
+  // Hard clamp
+  p.pos = clamp(p.pos, vec2<f32>(-0.9), vec2<f32>(0.9));
+
+  // ---- Apply combat damage ----
+  p.hp -= totalDmgTaken;
+
+  // Outnumbered attrition
+  if (nearbyEnemies > nearbyAllies + 5.0) {
+    p.hp -= dt * 2.0;
+  }
+
+  // ---- Death ----
+  if (p.hp <= 0.0) {
+    p.state = 1.0;
+    p.hp = 0.0;
+    p.age = 0.0;
+    // Explosion: boost velocity outward
+    let seed2 = idx * 31337u + u32(time * 1000.0);
+    let ex = (hash(seed2) - 0.5) * 0.8;
+    let ey = (hash(seed2 + 1u) - 0.5) * 0.8;
+    p.vel = vec2<f32>(ex, ey);
+    p.energy = 3.0;
+  }
+
+  // ---- Size: alive particles pulse and react ----
+  if (p.state < 1.0) {
+    let baseSize = 5.0;
+    let pulse = sin(time * 4.0 + f32(idx) * 0.37) * 1.0;
+    let combatBoost = min(p.energy * 2.0, 4.0);
+    let hpFactor = 0.7 + 0.3 * (p.hp / 100.0);
+    p.size = (baseSize + pulse + combatBoost) * hpFactor;
+  }
+
+  p.age += dt;
+  particlesOut[idx] = p;
+}
+`;
+
+// ---- WGSL: Fullscreen Quad Shader (trail fading) ----
+const trailShaderCode = /* wgsl */`
+struct VSOut {
+  @builtin(position) position: vec4<f32>,
+  @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> VSOut {
+  // Fullscreen triangle (3 verts cover the screen)
+  var out: VSOut;
+  var positions = array<vec2<f32>, 3>(
+    vec2<f32>(-1.0, -1.0),
+    vec2<f32>( 3.0, -1.0),
+    vec2<f32>(-1.0,  3.0),
+  );
+  out.position = vec4<f32>(positions[vi], 0.0, 1.0);
+  out.uv = positions[vi] * 0.5 + 0.5;
+  out.uv.y = 1.0 - out.uv.y;
+  return out;
+}
+
+@group(0) @binding(0) var prevFrame: texture_2d<f32>;
+@group(0) @binding(1) var prevSampler: sampler;
+
+@fragment
+fn fs_main(in: VSOut) -> @location(0) vec4<f32> {
+  let color = textureSample(prevFrame, prevSampler, in.uv);
+  // Fade + slight darken for ghosting trails
+  return vec4<f32>(color.rgb * 0.88, 1.0);
+}
+`;
+
+// ---- WGSL: Particle Render Shaders ----
+const renderShaderCode = /* wgsl */`
+
+struct VSOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) color: vec4<f32>,
+  @location(1) uv: vec2<f32>,
+};
+
+struct Particle {
+  pos: vec2<f32>,
+  vel: vec2<f32>,
+  team: f32,
+  hp: f32,
+  state: f32,
+  size: f32,
+  age: f32,
+  trail: vec2<f32>,
+  energy: f32,
+  r1: f32,
+  r2: f32,
+  r3: f32,
+  r4: f32,
+};
+
+struct RenderParams {
+  aspect: f32,
+  time: f32,
+  screenW: f32,
+  screenH: f32,
+};
+
+@group(0) @binding(0) var<storage, read> particles: array<Particle>;
+@group(0) @binding(1) var<uniform> rparams: RenderParams;
+
+const quadVerts = array<vec2<f32>, 6>(
+  vec2<f32>(-1.0, -1.0),
+  vec2<f32>( 1.0, -1.0),
+  vec2<f32>(-1.0,  1.0),
+  vec2<f32>(-1.0,  1.0),
+  vec2<f32>( 1.0, -1.0),
+  vec2<f32>( 1.0,  1.0),
+);
+
+@vertex
+fn vs_main(
+  @builtin(vertex_index) vertexIndex: u32,
+  @builtin(instance_index) instanceIndex: u32
+) -> VSOutput {
+  var out: VSOutput;
+  let p = particles[instanceIndex];
+
+  if (p.state >= 2.0 || p.size < 0.1) {
+    out.position = vec4<f32>(99.0, 99.0, 0.0, 1.0);
+    out.color = vec4<f32>(0.0);
+    out.uv = vec2<f32>(0.0);
+    return out;
+  }
+
+  let qv = quadVerts[vertexIndex];
+
+  // Size in clip space (relative to screen)
+  let pixelSize = p.size / min(rparams.screenW, rparams.screenH);
+
+  var pos = p.pos;
+
+  // Slow camera rotation
+  let angle = rparams.time * 0.025;
+  let ca = cos(angle);
+  let sa = sin(angle);
+  let rotated = vec2<f32>(pos.x * ca - pos.y * sa, pos.x * sa + pos.y * ca);
+
+  var screenPos = rotated;
+  screenPos.x /= rparams.aspect;
+
+  // Offset by quad vertex
+  screenPos += qv * pixelSize;
+
+  out.position = vec4<f32>(screenPos, 0.0, 1.0);
+  out.uv = qv;
+
+  // ---- Coloring ----
+  var baseColor: vec3<f32>;
+  let speed = length(p.vel);
+
+  if (p.team < 0.5) {
+    // Red team: fiery red-orange-yellow
+    let heat = min(speed * 2.0 + p.energy * 0.3, 1.5);
+    baseColor = vec3<f32>(
+      0.9 + heat * 0.1,
+      0.15 + heat * 0.25,
+      0.02 + heat * 0.08
+    );
+  } else {
+    // Blue team: electric blue-cyan-white
+    let heat = min(speed * 2.0 + p.energy * 0.3, 1.5);
+    baseColor = vec3<f32>(
+      0.05 + heat * 0.15,
+      0.3 + heat * 0.2,
+      0.9 + heat * 0.1
+    );
+  }
+
+  // Energy boost: particles in combat glow brighter
+  let energyBoost = 1.0 + p.energy * 0.4;
+  baseColor *= energyBoost;
+
+  // HP-based: low HP = more white-hot
+  var alpha: f32 = 1.0;
+  if (p.state < 1.0) {
+    let hpRatio = p.hp / 100.0;
+    if (hpRatio < 0.25) {
+      let danger = 1.0 - hpRatio / 0.25;
+      baseColor = mix(baseColor, vec3<f32>(1.0, 0.9, 0.5), danger * 0.5);
+    }
+  }
+
+  // Dying: white flash then fade
+  if (p.state >= 1.0) {
+    let t = p.age;
+    let flash = max(0.0, 1.0 - t * 3.0);
+    baseColor = mix(baseColor, vec3<f32>(1.5, 1.3, 1.0), flash);
+    alpha = max(0.0, 1.0 - t * 1.2);
+  }
+
+  out.color = vec4<f32>(baseColor, alpha);
+  return out;
+}
+
+@fragment
+fn fs_main(in: VSOutput) -> @location(0) vec4<f32> {
+  let dist = length(in.uv);
+  if (dist > 1.0) { discard; }
+
+  // Multi-layer glow for nebula look
+  let core = exp(-dist * dist * 10.0);         // bright core
+  let inner = exp(-dist * dist * 4.0) * 0.6;   // inner glow
+  let outer = exp(-dist * dist * 1.5) * 0.25;  // soft outer halo
+  let intensity = core + inner + outer;
+
+  let col = in.color.rgb * intensity;
+  let alpha = in.color.a * intensity;
+
+  return vec4<f32>(col, alpha);
+}
+`;
+
+// ---- Main Application ----
+async function main() {
+  if (!navigator.gpu) {
+    document.getElementById('fallback').style.display = 'block';
+    return;
+  }
+
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+  if (!adapter) {
+    document.getElementById('fallback').style.display = 'block';
+    return;
+  }
+
+  const device = await adapter.requestDevice();
+  device.lost.then(info => {
+    console.error('WebGPU device lost:', info.message);
+  });
+
+  const canvas = document.getElementById('gpu-canvas');
+  const hudCanvas = document.getElementById('hud-canvas');
+  const hudCtx = hudCanvas.getContext('2d');
+
+  let canvasW, canvasH;
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvasW = Math.floor(window.innerWidth * dpr);
+    canvasH = Math.floor(window.innerHeight * dpr);
+    canvas.width = canvasW;
+    canvas.height = canvasH;
+    hudCanvas.width = canvasW;
+    hudCanvas.height = canvasH;
+    hudCanvas.style.width = window.innerWidth + 'px';
+    hudCanvas.style.height = window.innerHeight + 'px';
+  }
+  resize();
+  window.addEventListener('resize', () => {
+    resize();
+    recreateTrailTextures();
+  });
+
+  const gpuCtx = canvas.getContext('webgpu');
+  const presentFormat = navigator.gpu.getPreferredCanvasFormat();
+  gpuCtx.configure({ device, format: presentFormat, alphaMode: 'opaque' });
+
+  // ---- Trail textures (ping-pong) ----
+  let trailTextures = [];
+  let trailViews = [];
+  let trailBindGroups = [];
+
+  function createTrailTextures() {
+    const desc = {
+      size: [canvasW, canvasH],
+      format: presentFormat,
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+    };
+    const t0 = device.createTexture(desc);
+    const t1 = device.createTexture(desc);
+    return [t0, t1];
+  }
+
+  const trailSampler = device.createSampler({
+    minFilter: 'linear',
+    magFilter: 'linear',
+  });
+
+  // Trail pipeline
+  const trailModule = device.createShaderModule({ code: trailShaderCode });
+  const trailBindGroupLayout = device.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+    ],
+  });
+  const trailPipeline = device.createRenderPipeline({
+    layout: device.createPipelineLayout({ bindGroupLayouts: [trailBindGroupLayout] }),
+    vertex: { module: trailModule, entryPoint: 'vs_main' },
+    fragment: {
+      module: trailModule,
+      entryPoint: 'fs_main',
+      targets: [{ format: presentFormat }],
+    },
+    primitive: { topology: 'triangle-list' },
+  });
+
+  function recreateTrailTextures() {
+    trailTextures.forEach(t => t.destroy());
+    trailTextures = createTrailTextures();
+    trailViews = trailTextures.map(t => t.createView());
+    trailBindGroups = trailTextures.map(t =>
+      device.createBindGroup({
+        layout: trailBindGroupLayout,
+        entries: [
+          { binding: 0, resource: t.createView() },
+          { binding: 1, resource: trailSampler },
+        ],
+      })
+    );
+  }
+  recreateTrailTextures();
+
+  // ---- Initialize Particle Data ----
+  const particleData = new Float32Array(NUM_PARTICLES * PARTICLE_FLOATS);
+  for (let i = 0; i < NUM_PARTICLES; i++) {
+    const off = i * PARTICLE_FLOATS;
+    const team = i < PARTICLES_PER_TEAM ? 0 : 1;
+    const side = team === 0 ? -1 : 1;
+
+    // Formation: disc-shaped clusters
+    const angle = Math.random() * Math.PI * 2;
+    const radius = Math.random() * 0.25;
+    const cx = side * 0.45;
+
+    particleData[off + 0] = cx + Math.cos(angle) * radius;  // posX
+    particleData[off + 1] = Math.sin(angle) * radius;       // posY
+    particleData[off + 2] = side * 0.05 + (Math.random() - 0.5) * 0.05; // velX
+    particleData[off + 3] = (Math.random() - 0.5) * 0.05;  // velY
+    particleData[off + 4] = team;
+    particleData[off + 5] = 100.0;  // hp
+    particleData[off + 6] = 0.0;    // state
+    particleData[off + 7] = 5.0;    // size
+    particleData[off + 8] = 0.0;    // age
+    particleData[off + 9] = particleData[off + 0];  // trailX
+    particleData[off + 10] = particleData[off + 1]; // trailY
+    particleData[off + 11] = 0.0;   // energy
+    particleData[off + 12] = 0.0;
+    particleData[off + 13] = 0.0;
+    particleData[off + 14] = 0.0;
+    particleData[off + 15] = 0.0;
+  }
+
+  // Double-buffered particle storage
+  const particleBuffers = [0, 1].map(() =>
+    device.createBuffer({
+      size: particleData.byteLength,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    })
+  );
+  device.queue.writeBuffer(particleBuffers[0], 0, particleData);
+  device.queue.writeBuffer(particleBuffers[1], 0, particleData);
+
+  // Readback buffer
+  const readbackBuffer = device.createBuffer({
+    size: particleData.byteLength,
+    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+  });
+
+  // Uniform buffers
+  const simParamsData = new Float32Array(8);
+  const simParamsBuffer = device.createBuffer({
+    size: 32,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+
+  const renderParamsData = new Float32Array(4);
+  const renderParamsBuffer = device.createBuffer({
+    size: 16,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+
+  // ---- Compute Pipeline ----
+  const computeModule = device.createShaderModule({ code: computeShaderCode });
+  const computeBGL = device.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+      { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+      { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+    ],
+  });
+  const computePipeline = device.createComputePipeline({
+    layout: device.createPipelineLayout({ bindGroupLayouts: [computeBGL] }),
+    compute: { module: computeModule, entryPoint: 'main' },
+  });
+
+  const computeBindGroups = [0, 1].map(i =>
+    device.createBindGroup({
+      layout: computeBGL,
+      entries: [
+        { binding: 0, resource: { buffer: particleBuffers[i] } },
+        { binding: 1, resource: { buffer: particleBuffers[1 - i] } },
+        { binding: 2, resource: { buffer: simParamsBuffer } },
+      ],
+    })
+  );
+
+  // ---- Render Pipeline (particles with additive blending) ----
+  const renderModule = device.createShaderModule({ code: renderShaderCode });
+  const renderBGL = device.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+      { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+    ],
+  });
+  const renderPipeline = device.createRenderPipeline({
+    layout: device.createPipelineLayout({ bindGroupLayouts: [renderBGL] }),
+    vertex: { module: renderModule, entryPoint: 'vs_main' },
+    fragment: {
+      module: renderModule,
+      entryPoint: 'fs_main',
+      targets: [{
+        format: presentFormat,
+        blend: {
+          color: { srcFactor: 'src-alpha', dstFactor: 'one', operation: 'add' },
+          alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+        },
+      }],
+    },
+    primitive: { topology: 'triangle-list' },
+  });
+
+  const renderBindGroups = [0, 1].map(i =>
+    device.createBindGroup({
+      layout: renderBGL,
+      entries: [
+        { binding: 0, resource: { buffer: particleBuffers[i] } },
+        { binding: 1, resource: { buffer: renderParamsBuffer } },
+      ],
+    })
+  );
+
+  // ---- Star field ----
+  const stars = Array.from({ length: STAR_COUNT }, () => ({
+    x: Math.random(),
+    y: Math.random(),
+    size: Math.random() * 1.8 + 0.3,
+    brightness: Math.random() * 0.5 + 0.15,
+    twinkleSpeed: Math.random() * 2.5 + 0.3,
+    twinklePhase: Math.random() * Math.PI * 2,
+    hue: Math.random() * 40 + 200, // slightly blue-ish white
+  }));
+
+  // A few brighter "feature" stars
+  for (let i = 0; i < 15; i++) {
+    stars.push({
+      x: Math.random(),
+      y: Math.random(),
+      size: Math.random() * 2.5 + 2,
+      brightness: Math.random() * 0.3 + 0.5,
+      twinkleSpeed: Math.random() * 1.5 + 0.2,
+      twinklePhase: Math.random() * Math.PI * 2,
+      hue: [210, 230, 250, 180, 280][Math.floor(Math.random() * 5)],
+    });
+  }
+
+  // ---- Game State ----
+  let step = 0;
+  let gameTime = 0;
+  let battleOver = false;
+  let redAlive = PARTICLES_PER_TEAM;
+  let blueAlive = PARTICLES_PER_TEAM;
+  let lastCountTime = -1;
+  let readbackPending = false;
+  let fps = 0;
+  let frameTimes = [];
+  let trailStep = 0;
+
+  // ---- Frame Loop ----
+  let lastTime = 0;
+  let started = false;
+
+  function frame(now) {
+    requestAnimationFrame(frame);
+
+    if (!started) { lastTime = now; started = true; return; }
+
+    let dt = (now - lastTime) / 1000;
+    lastTime = now;
+    dt = Math.min(dt, 0.04);
+
+    if (!battleOver) {
+      gameTime += dt;
+    }
+
+    // Rolling FPS
+    frameTimes.push(now);
+    while (frameTimes.length > 0 && frameTimes[0] < now - 1000) frameTimes.shift();
+    fps = frameTimes.length;
+
+    const aspect = canvasW / canvasH;
+    const phase = Math.min(gameTime / BATTLE_DURATION, 1.0);
+
+    // ---- Update uniforms ----
+    simParamsData[0] = battleOver ? 0.0 : dt;
+    simParamsData[1] = gameTime;
+    simParamsData[2] = NUM_PARTICLES;
+    simParamsData[3] = phase;
+    simParamsData[4] = 0;
+    simParamsData[5] = 0;
+    device.queue.writeBuffer(simParamsBuffer, 0, simParamsData);
+
+    renderParamsData[0] = aspect;
+    renderParamsData[1] = gameTime;
+    renderParamsData[2] = canvasW;
+    renderParamsData[3] = canvasH;
+    device.queue.writeBuffer(renderParamsBuffer, 0, renderParamsData);
+
+    const encoder = device.createCommandEncoder();
+
+    // ---- Compute pass ----
+    if (!battleOver) {
+      const cp = encoder.beginComputePass();
+      cp.setPipeline(computePipeline);
+      cp.setBindGroup(0, computeBindGroups[step % 2]);
+      cp.dispatchWorkgroups(Math.ceil(NUM_PARTICLES / WORKGROUP_SIZE));
+      cp.end();
+    }
+
+    const readBufferIdx = (step + 1) % 2;
+
+    // ---- Trail fade pass: render previous trail texture onto the other trail texture with fade ----
+    const trailSrc = trailStep % 2;
+    const trailDst = (trailStep + 1) % 2;
+    {
+      const tp = encoder.beginRenderPass({
+        colorAttachments: [{
+          view: trailViews[trailDst],
+          loadOp: 'clear',
+          clearValue: { r: 0.003, g: 0.003, b: 0.012, a: 1 },
+          storeOp: 'store',
+        }],
+      });
+      tp.setPipeline(trailPipeline);
+      tp.setBindGroup(0, trailBindGroups[trailSrc]);
+      tp.draw(3);
+      tp.end();
+    }
+
+    // ---- Particle render pass: draw particles onto the trail dest texture ----
+    {
+      const rp = encoder.beginRenderPass({
+        colorAttachments: [{
+          view: trailViews[trailDst],
+          loadOp: 'load',
+          storeOp: 'store',
+        }],
+      });
+      rp.setPipeline(renderPipeline);
+      rp.setBindGroup(0, renderBindGroups[readBufferIdx]);
+      rp.draw(6, NUM_PARTICLES);
+      rp.end();
+    }
+
+    // ---- Final composite: blit trail texture to screen ----
+    {
+      // We reuse the trail pipeline to blit trailDst to screen
+      const screenView = gpuCtx.getCurrentTexture().createView();
+      // Create a temporary bind group for the destination trail texture
+      const blitBG = device.createBindGroup({
+        layout: trailBindGroupLayout,
+        entries: [
+          { binding: 0, resource: trailViews[trailDst] },
+          { binding: 1, resource: trailSampler },
+        ],
+      });
+      const sp = encoder.beginRenderPass({
+        colorAttachments: [{
+          view: screenView,
+          loadOp: 'clear',
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          storeOp: 'store',
+        }],
+      });
+      sp.setPipeline(trailPipeline);
+      sp.setBindGroup(0, blitBG);
+      sp.draw(3);
+      sp.end();
+    }
+
+    // ---- Readback (throttled) ----
+    if (!readbackPending && (gameTime - lastCountTime > 0.4 || lastCountTime < 0)) {
+      encoder.copyBufferToBuffer(
+        particleBuffers[readBufferIdx], 0,
+        readbackBuffer, 0,
+        particleData.byteLength
+      );
+      readbackPending = true;
+      lastCountTime = gameTime;
+    }
+
+    device.queue.submit([encoder.finish()]);
+
+    step++;
+    trailStep++;
+
+    // ---- Async readback ----
+    if (readbackPending) {
+      readbackPending = false;
+      readbackBuffer.mapAsync(GPUMapMode.READ).then(() => {
+        const data = new Float32Array(readbackBuffer.getMappedRange());
+        let rC = 0, bC = 0;
+        for (let i = 0; i < NUM_PARTICLES; i++) {
+          const o = i * PARTICLE_FLOATS;
+          if (data[o + 6] < 1.0) { // state < 1 = alive
+            if (data[o + 4] < 0.5) rC++; else bC++;
+          }
+        }
+        redAlive = rC;
+        blueAlive = bC;
+        readbackBuffer.unmap();
+      }).catch(() => {});
+    }
+
+    // ---- Win condition ----
+    if (!battleOver) {
+      if (gameTime >= BATTLE_DURATION || redAlive <= 0 || blueAlive <= 0) {
+        battleOver = true;
+        showWinner();
+      }
+    }
+
+    // ---- HUD ----
+    drawHUD();
+  }
+
+  function drawHUD() {
+    const w = hudCanvas.width;
+    const h = hudCanvas.height;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const s = dpr; // scale factor
+    hudCtx.clearRect(0, 0, w, h);
+
+    // ---- Stars ----
+    for (const star of stars) {
+      const twinkle = 0.5 + 0.5 * Math.sin(gameTime * star.twinkleSpeed + star.twinklePhase);
+      const alpha = star.brightness * twinkle;
+      const r = 180 + (star.hue - 200) * 0.5;
+      const g = 190 + (star.hue - 200) * 0.3;
+      const b = 220 + (star.hue - 200) * 0.2;
+      hudCtx.fillStyle = `rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},${alpha.toFixed(2)})`;
+      hudCtx.beginPath();
+      hudCtx.arc(star.x * w, star.y * h, star.size * s, 0, Math.PI * 2);
+      hudCtx.fill();
+    }
+
+    // ---- Subtle nebula fog in background ----
+    const fogAlpha = 0.015;
+    const grad = hudCtx.createRadialGradient(w * 0.35, h * 0.5, 0, w * 0.35, h * 0.5, w * 0.4);
+    grad.addColorStop(0, `rgba(255,60,30,${fogAlpha})`);
+    grad.addColorStop(1, 'rgba(255,60,30,0)');
+    hudCtx.fillStyle = grad;
+    hudCtx.fillRect(0, 0, w, h);
+
+    const grad2 = hudCtx.createRadialGradient(w * 0.65, h * 0.5, 0, w * 0.65, h * 0.5, w * 0.4);
+    grad2.addColorStop(0, `rgba(30,80,255,${fogAlpha})`);
+    grad2.addColorStop(1, 'rgba(30,80,255,0)');
+    hudCtx.fillStyle = grad2;
+    hudCtx.fillRect(0, 0, w, h);
+
+    // ---- HUD Panel (top center) ----
+    // Semi-transparent backing
+    const panelW = 500 * s;
+    const panelH = 80 * s;
+    const panelX = (w - panelW) / 2;
+    const panelY = 10 * s;
+    hudCtx.fillStyle = 'rgba(0,0,0,0.4)';
+    hudCtx.strokeStyle = 'rgba(255,255,255,0.08)';
+    hudCtx.lineWidth = 1;
+    roundRect(hudCtx, panelX, panelY, panelW, panelH, 8 * s);
+
+    // Title
+    hudCtx.font = `bold ${11 * s}px 'Courier New', monospace`;
+    hudCtx.fillStyle = 'rgba(255,255,255,0.35)';
+    hudCtx.textAlign = 'center';
+    hudCtx.letterSpacing = `${3 * s}px`;
+    hudCtx.fillText('WEBGPU NEBULA WAR', w / 2, panelY + 18 * s);
+    hudCtx.letterSpacing = '0px';
+
+    // Timer
+    const remaining = Math.max(0, BATTLE_DURATION - gameTime);
+    const minutes = Math.floor(remaining / 60);
+    const seconds = Math.floor(remaining % 60);
+    const timeStr = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    hudCtx.font = `bold ${28 * s}px 'Courier New', monospace`;
+    const timerPulse = remaining < 10 ? (0.7 + 0.3 * Math.sin(gameTime * 6)) : 1;
+    hudCtx.fillStyle = remaining < 10
+      ? `rgba(255,${Math.round(80 * timerPulse)},${Math.round(80 * timerPulse)},0.95)`
+      : 'rgba(255,255,255,0.85)';
+    hudCtx.fillText(timeStr, w / 2, panelY + 50 * s);
+
+    // Team bars
+    const barW = 160 * s;
+    const barH = 8 * s;
+    const barY = panelY + 60 * s;
+    const barGap = 30 * s;
+
+    // Red (left)
+    hudCtx.font = `bold ${13 * s}px 'Courier New', monospace`;
+    hudCtx.textAlign = 'right';
+    hudCtx.fillStyle = '#ff4422';
+    hudCtx.fillText(`RED ${redAlive}`, w / 2 - barGap, barY + barH - 1);
+
+    const redBarX = w / 2 - barGap - barW - 5 * s;
+    hudCtx.fillStyle = 'rgba(255,68,34,0.12)';
+    hudCtx.fillRect(redBarX, barY, barW, barH);
+    const redRatio = redAlive / PARTICLES_PER_TEAM;
+    const redFillW = barW * redRatio;
+    hudCtx.fillStyle = `rgba(255,68,34,${0.4 + redRatio * 0.5})`;
+    hudCtx.fillRect(redBarX + barW - redFillW, barY, redFillW, barH);
+    // Bright tip
+    if (redFillW > 2) {
+      hudCtx.fillStyle = 'rgba(255,120,80,0.8)';
+      hudCtx.fillRect(redBarX + barW - redFillW, barY, 2 * s, barH);
+    }
+
+    // Blue (right)
+    hudCtx.textAlign = 'left';
+    hudCtx.fillStyle = '#2288ff';
+    hudCtx.fillText(`${blueAlive} BLUE`, w / 2 + barGap, barY + barH - 1);
+
+    const blueBarX = w / 2 + barGap + 5 * s;
+    hudCtx.fillStyle = 'rgba(34,136,255,0.12)';
+    hudCtx.fillRect(blueBarX, barY, barW, barH);
+    const blueRatio = blueAlive / PARTICLES_PER_TEAM;
+    const blueFillW = barW * blueRatio;
+    hudCtx.fillStyle = `rgba(34,136,255,${0.4 + blueRatio * 0.5})`;
+    hudCtx.fillRect(blueBarX, barY, blueFillW, barH);
+    if (blueFillW > 2) {
+      hudCtx.fillStyle = 'rgba(80,160,255,0.8)';
+      hudCtx.fillRect(blueBarX + blueFillW - 2 * s, barY, 2 * s, barH);
+    }
+
+    // ---- Bottom bar ----
+    hudCtx.font = `${10 * s}px 'Courier New', monospace`;
+    hudCtx.textAlign = 'center';
+    hudCtx.fillStyle = 'rgba(255,255,255,0.25)';
+    hudCtx.fillText(
+      `${NUM_PARTICLES.toLocaleString()} PARTICLES  |  GPU COMPUTE SHADERS (WGSL)  |  ${fps} FPS`,
+      w / 2, h - 14 * s
+    );
+
+    // Mini legend
+    const ly = h - 34 * s;
+    hudCtx.fillStyle = 'rgba(255,68,34,0.8)';
+    hudCtx.beginPath();
+    hudCtx.arc(w / 2 - 75 * s, ly, 3 * s, 0, Math.PI * 2);
+    hudCtx.fill();
+    hudCtx.fillStyle = 'rgba(255,255,255,0.4)';
+    hudCtx.textAlign = 'left';
+    hudCtx.font = `${10 * s}px 'Courier New', monospace`;
+    hudCtx.fillText('Red Swarm', w / 2 - 68 * s, ly + 3.5 * s);
+
+    hudCtx.fillStyle = 'rgba(34,136,255,0.8)';
+    hudCtx.beginPath();
+    hudCtx.arc(w / 2 + 25 * s, ly, 3 * s, 0, Math.PI * 2);
+    hudCtx.fill();
+    hudCtx.fillStyle = 'rgba(255,255,255,0.4)';
+    hudCtx.fillText('Blue Swarm', w / 2 + 32 * s, ly + 3.5 * s);
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  function showWinner() {
+    const overlay = document.getElementById('winner-overlay');
+    const text = document.getElementById('winner-text');
+    const sub = document.getElementById('winner-sub');
+    overlay.style.display = 'block';
+
+    if (redAlive > blueAlive) {
+      text.textContent = 'RED SWARM WINS';
+      text.style.color = '#ff4422';
+      overlay.style.borderColor = '#ff4422';
+      overlay.style.boxShadow = '0 0 60px rgba(255,68,34,0.4)';
+      sub.textContent = `${redAlive} survivors vs ${blueAlive} | Decisive victory`;
+    } else if (blueAlive > redAlive) {
+      text.textContent = 'BLUE SWARM WINS';
+      text.style.color = '#2288ff';
+      overlay.style.borderColor = '#2288ff';
+      overlay.style.boxShadow = '0 0 60px rgba(34,136,255,0.4)';
+      sub.textContent = `${blueAlive} survivors vs ${redAlive} | Decisive victory`;
+    } else {
+      text.textContent = 'MUTUAL ANNIHILATION';
+      text.style.color = '#ffaa00';
+      overlay.style.borderColor = '#ffaa00';
+      overlay.style.boxShadow = '0 0 60px rgba(255,170,0,0.4)';
+      sub.textContent = `Both swarms decimated: ${redAlive} each`;
+    }
+
+    overlay.style.opacity = '0';
+    overlay.style.transition = 'opacity 2s ease-in';
+    requestAnimationFrame(() => { overlay.style.opacity = '1'; });
+  }
+
+  // Start the render loop
+  requestAnimationFrame(frame);
+}
+
+main().catch(err => {
+  console.error('WebGPU init failed:', err);
+  document.getElementById('fallback').style.display = 'block';
+});
+</script>
+</body>
+</html>

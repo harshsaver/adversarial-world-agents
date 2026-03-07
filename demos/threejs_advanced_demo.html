@@ -1,0 +1,1731 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Advanced Adversarial Simulation - Red vs Blue</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { overflow: hidden; background: #000; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
+  canvas { display: block; }
+
+  /* ── MINIMAP ─────────────────────────────────────────── */
+  #minimap-container {
+    position: absolute; bottom: 20px; left: 20px;
+    width: 180px; height: 180px;
+    border: 2px solid rgba(255,255,255,0.15);
+    border-radius: 12px;
+    overflow: hidden;
+    background: rgba(0,0,0,0.5);
+    backdrop-filter: blur(8px);
+    z-index: 50;
+  }
+  #minimap-container canvas { width: 100%; height: 100%; }
+  #minimap-label {
+    position: absolute; top: 6px; left: 0; width: 100%;
+    text-align: center; font-size: 9px; letter-spacing: 2px;
+    text-transform: uppercase; color: rgba(255,255,255,0.4);
+    pointer-events: none;
+  }
+
+  /* ── HUD ─────────────────────────────────────────────── */
+  #hud {
+    position: absolute; top: 0; left: 0; width: 100%; pointer-events: none;
+    padding: 16px 24px;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    z-index: 50;
+  }
+
+  .glass-panel {
+    background: rgba(10,10,20,0.45);
+    border: 1px solid rgba(255,255,255,0.08);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-radius: 14px;
+    padding: 14px 22px;
+    color: #fff;
+    font-size: 13px;
+    line-height: 1.6;
+    min-width: 170px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.06);
+  }
+
+  .glass-panel .label {
+    font-size: 9px; text-transform: uppercase;
+    letter-spacing: 2.5px; opacity: 0.45; margin-bottom: 2px;
+  }
+  .glass-panel .big-num {
+    font-size: 36px; font-weight: 200;
+    font-variant-numeric: tabular-nums; line-height: 1.1;
+  }
+  .glass-panel .timer {
+    font-size: 38px; font-weight: 200;
+    letter-spacing: 4px; font-variant-numeric: tabular-nums;
+  }
+  .glass-panel.center { text-align: center; min-width: 210px; }
+
+  .hp-bar { width: 100%; height: 4px; background: rgba(255,255,255,0.08); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+  .hp-bar-fill { height: 100%; border-radius: 2px; transition: width 0.3s ease; }
+  .red-fill { background: linear-gradient(90deg, #ff2222, #ff6644); }
+  .blue-fill { background: linear-gradient(90deg, #2266ff, #44bbff); }
+
+  .red-text { color: #ff4455; }
+  .blue-text { color: #4499ff; }
+
+  /* ── KILL FEED ───────────────────────────────────────── */
+  #kill-feed {
+    position: absolute; top: 110px; right: 24px;
+    width: 240px; z-index: 60; pointer-events: none;
+    display: none; /* shown via JS after first kill */
+  }
+  .kill-entry {
+    background: rgba(0,0,0,0.55); backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px; padding: 8px 14px;
+    margin-bottom: 6px; font-size: 12px; color: rgba(255,255,255,0.7);
+    animation: killSlide 0.4s cubic-bezier(0.16,1,0.3,1);
+    letter-spacing: 0.5px;
+  }
+  @keyframes killSlide {
+    0% { transform: translateX(60px); opacity: 0; }
+    100% { transform: translateX(0); opacity: 1; }
+  }
+
+  /* ── OVERLAY ─────────────────────────────────────────── */
+  #overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    display: none; justify-content: center; align-items: center;
+    pointer-events: none; z-index: 100;
+  }
+  #overlay.visible { display: flex; }
+
+  #overlay .winner-box {
+    background: rgba(5,5,15,0.8);
+    border: 1px solid rgba(255,255,255,0.12);
+    backdrop-filter: blur(30px); border-radius: 24px;
+    padding: 50px 90px; text-align: center;
+    animation: popIn 0.8s cubic-bezier(0.16,1,0.3,1);
+    box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+  }
+  .winner-title {
+    font-size: 56px; font-weight: 100; letter-spacing: 10px;
+    text-transform: uppercase; margin-bottom: 12px;
+  }
+  .winner-sub {
+    font-size: 13px; color: rgba(255,255,255,0.35);
+    letter-spacing: 4px; text-transform: uppercase;
+  }
+  @keyframes popIn {
+    0% { transform: scale(0.6) translateY(30px); opacity: 0; }
+    100% { transform: scale(1) translateY(0); opacity: 1; }
+  }
+
+  #restart-btn {
+    position: absolute; bottom: 50px; left: 50%; transform: translateX(-50%);
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15);
+    color: #fff; font-size: 13px; letter-spacing: 3px; text-transform: uppercase;
+    padding: 14px 44px; border-radius: 10px; cursor: pointer;
+    pointer-events: auto; display: none; transition: all 0.3s;
+    z-index: 101; backdrop-filter: blur(10px);
+  }
+  #restart-btn:hover { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.3); }
+
+  /* ── STATUS BAR ──────────────────────────────────────── */
+  #status-bar {
+    position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+    z-index: 50; pointer-events: none;
+  }
+  #status-bar .glass-panel {
+    padding: 8px 20px; font-size: 11px; letter-spacing: 2px;
+    text-transform: uppercase; opacity: 0.6;
+  }
+</style>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+
+<!-- HUD -->
+<div id="hud">
+  <div class="glass-panel">
+    <div class="label">Red Army -- Attackers</div>
+    <div class="big-num red-text" id="red-count">8</div>
+    <div class="hp-bar"><div class="hp-bar-fill red-fill" id="red-hp" style="width:100%"></div></div>
+  </div>
+  <div class="glass-panel center">
+    <div class="label">Engagement Timer</div>
+    <div class="timer" id="timer">00:00</div>
+    <div class="label" style="margin-top:6px" id="phase-label">Deployment Phase</div>
+  </div>
+  <div class="glass-panel" style="text-align:right;">
+    <div class="label">Blue Army -- Defenders</div>
+    <div class="big-num blue-text" id="blue-count">8</div>
+    <div class="hp-bar"><div class="hp-bar-fill blue-fill" id="blue-hp" style="width:100%"></div></div>
+  </div>
+</div>
+
+<!-- Kill Feed (top right, below stats) -->
+<div id="kill-feed"></div>
+
+<!-- Minimap -->
+<div id="minimap-container">
+  <canvas id="minimap-canvas" width="256" height="256"></canvas>
+  <div id="minimap-label">Tactical Map</div>
+</div>
+
+<!-- Status bar -->
+<div id="status-bar">
+  <div class="glass-panel" id="status-text">Initializing battlefield...</div>
+</div>
+
+<!-- Winner overlay -->
+<div id="overlay">
+  <div class="winner-box">
+    <div class="winner-title" id="winner-text">Victory</div>
+    <div class="winner-sub" id="winner-sub">Battle concluded</div>
+  </div>
+</div>
+<button id="restart-btn">Restart Battle</button>
+
+<script type="module">
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  IMPORTS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { Sky } from 'three/addons/objects/Sky.js';
+import { Water } from 'three/addons/objects/Water.js';
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  CONSTANTS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const TERRAIN_SIZE = 120;
+const TERRAIN_SEGMENTS = 128;
+const TERRAIN_HEIGHT = 12;
+const WATER_LEVEL = -1.5;
+const NUM_RED = 8;
+const NUM_BLUE = 8;
+const MAX_HP = 120;
+const DAMAGE_PER_HIT = 14;
+const ATTACK_RANGE = 3.5;
+const ATTACK_COOLDOWN = 0.55;
+const UNIT_SPEED = 8;
+const PROJECTILE_SPEED = 28;
+const BASE_POS = new THREE.Vector3(0, 0, 30);
+const EXPLOSION_PARTICLES = 220;
+const MAX_TRAIL_POINTS = 18;
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GLOBALS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+let scene, camera, renderer, composer;
+let minimapRenderer, minimapCamera;
+let clock, elapsed = 0;
+let redUnits = [], blueUnits = [];
+let projectiles = [];
+let explosionPool = null; // InstancedMesh
+let explosionData = [];
+let shockwaves = [];
+let sun, sky, water;
+let baseMeshes = {};
+let gameOver = false;
+let slowMotion = false;
+let slowMotionTimer = 0;
+let killFeedEntries = [];
+let terrainHeightData = [];
+let terrainMesh;
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  VIGNETTE + FILM SHADER
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const VignetteFilmShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    time: { value: 0 },
+    vignetteStrength: { value: 0.45 },
+    filmGrain: { value: 0.06 },
+    tintColor: { value: new THREE.Vector3(1.0, 0.97, 0.92) }
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float time;
+    uniform float vignetteStrength;
+    uniform float filmGrain;
+    uniform vec3 tintColor;
+    varying vec2 vUv;
+
+    float rand(vec2 co) {
+      return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+
+    void main() {
+      vec4 color = texture2D(tDiffuse, vUv);
+
+      // Vignette
+      vec2 center = vUv - 0.5;
+      float dist = length(center);
+      float vignette = smoothstep(0.7, 0.3, dist);
+      color.rgb *= mix(1.0, vignette, vignetteStrength);
+
+      // Film grain
+      float grain = rand(vUv * time * 0.01) * filmGrain;
+      color.rgb += grain - filmGrain * 0.5;
+
+      // Slight color tint
+      color.rgb *= tintColor;
+
+      gl_FragColor = color;
+    }
+  `
+};
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  FRESNEL SHIELD SHADER
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const FresnelShieldMaterial = new THREE.ShaderMaterial({
+  uniforms: {
+    time: { value: 0 },
+    color: { value: new THREE.Color(0x2266ff) },
+    opacity: { value: 0.15 }
+  },
+  vertexShader: `
+    varying vec3 vNormal;
+    varying vec3 vViewDir;
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      vNormal = normalize(normalMatrix * normal);
+      vec4 worldPos = modelMatrix * vec4(position, 1.0);
+      vViewDir = normalize(cameraPosition - worldPos.xyz);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform float time;
+    uniform vec3 color;
+    uniform float opacity;
+    varying vec3 vNormal;
+    varying vec3 vViewDir;
+    varying vec2 vUv;
+
+    void main() {
+      float fresnel = pow(1.0 - abs(dot(vNormal, vViewDir)), 3.0);
+      float hexPattern = sin(vUv.x * 40.0 + time) * sin(vUv.y * 40.0 + time * 0.7);
+      hexPattern = smoothstep(0.3, 0.7, hexPattern) * 0.15;
+      float alpha = fresnel * 0.6 + hexPattern + opacity * 0.3;
+      alpha *= 0.5 + 0.5 * sin(time * 2.0);
+
+      vec3 finalColor = color + vec3(fresnel * 0.3);
+      gl_FragColor = vec4(finalColor, alpha * 0.6);
+    }
+  `,
+  transparent: true,
+  side: THREE.DoubleSide,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending
+});
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  TERRAIN SHADER
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const TerrainShaderMaterial = new THREE.ShaderMaterial({
+  uniforms: {
+    sunDir: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
+    fogColor: { value: new THREE.Color(0x88aacc) },
+    fogDensity: { value: 0.012 }
+  },
+  vertexShader: `
+    varying vec3 vWorldPos;
+    varying vec3 vNormal;
+    varying float vHeight;
+    void main() {
+      vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+      vNormal = normalize(normalMatrix * normal);
+      vHeight = position.y;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform vec3 sunDir;
+    uniform vec3 fogColor;
+    uniform float fogDensity;
+    varying vec3 vWorldPos;
+    varying vec3 vNormal;
+    varying float vHeight;
+
+    void main() {
+      // Slope factor
+      float slope = 1.0 - abs(dot(vNormal, vec3(0.0, 1.0, 0.0)));
+
+      // Colors by height + slope
+      vec3 grassColor = vec3(0.15, 0.35, 0.12);
+      vec3 dirtColor = vec3(0.28, 0.22, 0.14);
+      vec3 rockColor = vec3(0.35, 0.32, 0.28);
+      vec3 snowColor = vec3(0.85, 0.88, 0.92);
+      vec3 sandColor = vec3(0.55, 0.48, 0.32);
+
+      float h = vHeight;
+
+      // Base: blend sand -> grass -> rock -> snow by height
+      vec3 col = sandColor;
+      col = mix(col, grassColor, smoothstep(-1.0, 1.0, h));
+      col = mix(col, dirtColor, smoothstep(2.0, 5.0, h));
+      col = mix(col, rockColor, smoothstep(5.0, 8.0, h));
+      col = mix(col, snowColor, smoothstep(8.0, 11.0, h));
+
+      // Override with rock on steep slopes
+      col = mix(col, rockColor, smoothstep(0.3, 0.7, slope));
+
+      // Simple diffuse lighting
+      float diff = max(dot(vNormal, sunDir), 0.0);
+      float ambient = 0.3;
+      col *= (ambient + diff * 0.7);
+
+      // Distance fog
+      float dist = length(vWorldPos - cameraPosition);
+      float fogFactor = 1.0 - exp(-fogDensity * dist * dist);
+      col = mix(col, fogColor, clamp(fogFactor, 0.0, 1.0));
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `
+});
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  NOISE FUNCTION (simplex-like via hash)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function hash(x, y) {
+  let n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+  return n - Math.floor(n);
+}
+
+function smoothNoise(x, y) {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  const fx = x - ix, fy = y - iy;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const a = hash(ix, iy), b = hash(ix + 1, iy);
+  const c = hash(ix, iy + 1), d = hash(ix + 1, iy + 1);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+
+function fbm(x, y, octaves = 5) {
+  let val = 0, amp = 0.5, freq = 1;
+  for (let i = 0; i < octaves; i++) {
+    val += amp * smoothNoise(x * freq, y * freq);
+    amp *= 0.5; freq *= 2.1;
+  }
+  return val;
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  INIT
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function init() {
+  // ── Scene
+  scene = new THREE.Scene();
+
+  // ── Renderer
+  renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.9;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  document.body.appendChild(renderer.domElement);
+
+  // ── Camera
+  camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 800);
+  camera.position.set(-30, 25, -50);
+
+  // ── Clock
+  clock = new THREE.Clock();
+
+  // Build world
+  createSky();
+  createLighting();
+  createTerrain();
+  createWater();
+  createBase();
+  createExplosionPool();
+  spawnTeams();
+  setupPostProcessing();
+  setupMinimap();
+
+  // Events
+  window.addEventListener('resize', onResize);
+  document.getElementById('restart-btn').addEventListener('click', restartSimulation);
+
+  updateStatus('Battle commencing');
+  animate();
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  SKY
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function createSky() {
+  sky = new Sky();
+  sky.scale.setScalar(450000);
+  scene.add(sky);
+
+  sun = new THREE.Vector3();
+
+  const skyUniforms = sky.material.uniforms;
+  skyUniforms['turbidity'].value = 4;
+  skyUniforms['rayleigh'].value = 2;
+  skyUniforms['mieCoefficient'].value = 0.005;
+  skyUniforms['mieDirectionalG'].value = 0.8;
+
+  const phi = THREE.MathUtils.degToRad(88 - 25); // sun elevation
+  const theta = THREE.MathUtils.degToRad(220);
+  sun.setFromSphericalCoords(1, phi, theta);
+  skyUniforms['sunPosition'].value.copy(sun);
+
+  // Fog matching sky
+  scene.fog = new THREE.FogExp2(0x8faec4, 0.004);
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  LIGHTING
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function createLighting() {
+  // Hemisphere: sky blue + ground brown
+  const hemi = new THREE.HemisphereLight(0x87ceeb, 0x553322, 0.4);
+  scene.add(hemi);
+
+  // Ambient
+  const ambient = new THREE.AmbientLight(0x404060, 0.3);
+  scene.add(ambient);
+
+  // Main directional sunlight with high-res shadows
+  const dirLight = new THREE.DirectionalLight(0xffeedd, 1.8);
+  const sunDir = sun.clone().normalize().multiplyScalar(60);
+  dirLight.position.copy(sunDir);
+  dirLight.castShadow = true;
+  dirLight.shadow.mapSize.width = 4096;
+  dirLight.shadow.mapSize.height = 4096;
+  dirLight.shadow.camera.left = -60;
+  dirLight.shadow.camera.right = 60;
+  dirLight.shadow.camera.top = 60;
+  dirLight.shadow.camera.bottom = -60;
+  dirLight.shadow.camera.near = 1;
+  dirLight.shadow.camera.far = 160;
+  dirLight.shadow.bias = -0.001;
+  dirLight.shadow.normalBias = 0.02;
+  scene.add(dirLight);
+
+  // Fill light from opposite side
+  const fillLight = new THREE.DirectionalLight(0x6688bb, 0.4);
+  fillLight.position.set(-30, 20, -40);
+  scene.add(fillLight);
+
+  // Warm accent from behind
+  const backLight = new THREE.DirectionalLight(0xffaa66, 0.3);
+  backLight.position.set(20, 10, 50);
+  scene.add(backLight);
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  TERRAIN (PlaneGeometry with vertex displacement)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function createTerrain() {
+  const geo = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, TERRAIN_SEGMENTS, TERRAIN_SEGMENTS);
+  geo.rotateX(-Math.PI / 2);
+
+  const pos = geo.attributes.position;
+  const count = pos.count;
+  terrainHeightData = new Float32Array(count);
+
+  for (let i = 0; i < count; i++) {
+    const x = pos.getX(i);
+    const z = pos.getZ(i);
+
+    // FBM noise for rolling hills
+    let h = fbm(x * 0.03 + 5.3, z * 0.03 + 2.7, 5) * TERRAIN_HEIGHT;
+
+    // Flatten center area (battlefield)
+    const distFromCenter = Math.sqrt(x * x + z * z);
+    const flattenFactor = smoothstep(15, 40, distFromCenter);
+    h *= flattenFactor;
+
+    // Ensure water-bordering areas slope down
+    const edgeDist = Math.max(Math.abs(x), Math.abs(z));
+    const edgeFactor = smoothstep(TERRAIN_SIZE * 0.42, TERRAIN_SIZE * 0.48, edgeDist);
+    h = h * (1 - edgeFactor) + WATER_LEVEL * 0.5 * edgeFactor;
+
+    pos.setY(i, h);
+    terrainHeightData[i] = h;
+  }
+
+  geo.computeVertexNormals();
+
+  terrainMesh = new THREE.Mesh(geo, TerrainShaderMaterial);
+  terrainMesh.receiveShadow = true;
+  terrainMesh.castShadow = true;
+  scene.add(terrainMesh);
+}
+
+function smoothstep(edge0, edge1, x) {
+  const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+function getTerrainHeight(x, z) {
+  // Sample terrain height at world position
+  const halfSize = TERRAIN_SIZE / 2;
+  const u = (x + halfSize) / TERRAIN_SIZE;
+  const v = (z + halfSize) / TERRAIN_SIZE;
+
+  if (u < 0 || u > 1 || v < 0 || v > 1) return 0;
+
+  const col = u * TERRAIN_SEGMENTS;
+  const row = v * TERRAIN_SEGMENTS;
+  const c0 = Math.floor(col), r0 = Math.floor(row);
+  const c1 = Math.min(c0 + 1, TERRAIN_SEGMENTS);
+  const r1 = Math.min(r0 + 1, TERRAIN_SEGMENTS);
+  const fc = col - c0, fr = row - r0;
+
+  const idx = (r, c) => r * (TERRAIN_SEGMENTS + 1) + c;
+  const h00 = terrainHeightData[idx(r0, c0)] || 0;
+  const h10 = terrainHeightData[idx(r0, c1)] || 0;
+  const h01 = terrainHeightData[idx(r1, c0)] || 0;
+  const h11 = terrainHeightData[idx(r1, c1)] || 0;
+
+  return h00 * (1 - fc) * (1 - fr) + h10 * fc * (1 - fr) +
+         h01 * (1 - fc) * fr + h11 * fc * fr;
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  WATER
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function createWater() {
+  const waterGeo = new THREE.PlaneGeometry(400, 400);
+
+  // Generate procedural water normals texture
+  const waterNormalTex = generateWaterNormals();
+
+  water = new Water(waterGeo, {
+    textureWidth: 512,
+    textureHeight: 512,
+    waterNormals: waterNormalTex,
+    sunDirection: sun.clone().normalize(),
+    sunColor: 0xffffff,
+    waterColor: 0x001e3f,
+    distortionScale: 3.7,
+    fog: scene.fog !== undefined
+  });
+  water.rotation.x = -Math.PI / 2;
+  water.position.y = WATER_LEVEL;
+  scene.add(water);
+}
+
+function generateWaterNormals() {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = size; canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const imageData = ctx.createImageData(size, size);
+  const data = imageData.data;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const idx = (y * size + x) * 4;
+      const nx = Math.sin(x * 0.1) * Math.cos(y * 0.15) * 0.5;
+      const ny = Math.cos(x * 0.12) * Math.sin(y * 0.1) * 0.5;
+      const nz = 1.0;
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      data[idx + 0] = ((nx / len) * 0.5 + 0.5) * 255;
+      data[idx + 1] = ((ny / len) * 0.5 + 0.5) * 255;
+      data[idx + 2] = ((nz / len) * 0.5 + 0.5) * 255;
+      data[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  BLUE BASE (compound structure)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function createBase() {
+  const baseY = getTerrainHeight(BASE_POS.x, BASE_POS.z);
+  BASE_POS.y = baseY;
+
+  const baseMat = new THREE.MeshStandardMaterial({
+    color: 0x334466, roughness: 0.3, metalness: 0.7
+  });
+  const blueMat = new THREE.MeshStandardMaterial({
+    color: 0x2255cc, emissive: 0x112266, emissiveIntensity: 0.5,
+    roughness: 0.2, metalness: 0.8
+  });
+
+  // ── Central tower
+  const towerGeo = new THREE.CylinderGeometry(1.5, 2.2, 10, 8);
+  const tower = new THREE.Mesh(towerGeo, blueMat);
+  tower.position.set(BASE_POS.x, baseY + 5, BASE_POS.z);
+  tower.castShadow = true; tower.receiveShadow = true;
+  scene.add(tower);
+  baseMeshes.tower = tower;
+
+  // Tower top crystal
+  const crystalGeo = new THREE.OctahedronGeometry(1.2, 0);
+  const crystalMat = new THREE.MeshStandardMaterial({
+    color: 0x44aaff, emissive: 0x2288ff, emissiveIntensity: 1.2,
+    roughness: 0.1, metalness: 0.9, transparent: true, opacity: 0.9
+  });
+  const crystal = new THREE.Mesh(crystalGeo, crystalMat);
+  crystal.position.set(BASE_POS.x, baseY + 11, BASE_POS.z);
+  crystal.castShadow = true;
+  scene.add(crystal);
+  baseMeshes.crystal = crystal;
+
+  // Crystal light
+  const crystalLight = new THREE.PointLight(0x44aaff, 5, 30);
+  crystalLight.position.set(BASE_POS.x, baseY + 12, BASE_POS.z);
+  scene.add(crystalLight);
+  baseMeshes.crystalLight = crystalLight;
+
+  // ── Walls (4 segments forming a square)
+  const wallW = 12, wallH = 3, wallD = 0.8;
+  const wallGeo = new THREE.BoxGeometry(wallW, wallH, wallD);
+  const wallPositions = [
+    { x: 0, z: 7, ry: 0 },
+    { x: 0, z: -7, ry: 0 },
+    { x: 7, z: 0, ry: Math.PI / 2 },
+    { x: -7, z: 0, ry: Math.PI / 2 }
+  ];
+  baseMeshes.walls = [];
+  wallPositions.forEach(wp => {
+    const wall = new THREE.Mesh(wallGeo, baseMat);
+    wall.position.set(BASE_POS.x + wp.x, baseY + wallH / 2, BASE_POS.z + wp.z);
+    wall.rotation.y = wp.ry;
+    wall.castShadow = true; wall.receiveShadow = true;
+    scene.add(wall);
+    baseMeshes.walls.push(wall);
+  });
+
+  // ── Corner pillars
+  const pillarGeo = new THREE.CylinderGeometry(0.6, 0.8, 4.5, 6);
+  const corners = [[-7,-7],[7,-7],[7,7],[-7,7]];
+  corners.forEach(([cx, cz]) => {
+    const pillar = new THREE.Mesh(pillarGeo, blueMat);
+    pillar.position.set(BASE_POS.x + cx, baseY + 2.25, BASE_POS.z + cz);
+    pillar.castShadow = true;
+    scene.add(pillar);
+
+    // Pillar top light
+    const pLight = new THREE.PointLight(0x3366ff, 1, 8);
+    pLight.position.set(BASE_POS.x + cx, baseY + 5, BASE_POS.z + cz);
+    scene.add(pLight);
+  });
+
+  // ── Shield dome (fresnel)
+  const shieldGeo = new THREE.SphereGeometry(14, 48, 48);
+  const shield = new THREE.Mesh(shieldGeo, FresnelShieldMaterial.clone());
+  shield.position.set(BASE_POS.x, baseY + 2, BASE_POS.z);
+  scene.add(shield);
+  baseMeshes.shield = shield;
+
+  // ── Base ring on ground
+  const ringGeo = new THREE.TorusGeometry(14, 0.15, 8, 64);
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0x2266ff, transparent: true, opacity: 0.4 });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.position.set(BASE_POS.x, baseY + 0.1, BASE_POS.z);
+  ring.rotation.x = -Math.PI / 2;
+  scene.add(ring);
+  baseMeshes.ring = ring;
+
+  // Inner ring
+  const innerRing = new THREE.Mesh(
+    new THREE.TorusGeometry(8, 0.1, 8, 48),
+    new THREE.MeshBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.25 })
+  );
+  innerRing.position.set(BASE_POS.x, baseY + 0.1, BASE_POS.z);
+  innerRing.rotation.x = -Math.PI / 2;
+  scene.add(innerRing);
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  UNIT CREATION
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function createUnit(team, index) {
+  const isRed = team === 'red';
+  const color = isRed ? 0xff2222 : 0x2288ff;
+  const emissive = isRed ? 0xcc1111 : 0x1155cc;
+
+  // Main body: capsule (cylinder + two spheres)
+  const group = new THREE.Group();
+
+  // Body cylinder
+  const bodyGeo = new THREE.CylinderGeometry(0.5, 0.5, 1.4, 12);
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color, emissive, emissiveIntensity: 0.7,
+    roughness: 0.15, metalness: 0.85
+  });
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+  body.castShadow = true;
+  group.add(body);
+
+  // Top sphere
+  const topGeo = new THREE.SphereGeometry(0.5, 12, 12);
+  const top = new THREE.Mesh(topGeo, bodyMat);
+  top.position.y = 0.7;
+  group.add(top);
+
+  // Bottom sphere
+  const bot = new THREE.Mesh(topGeo, bodyMat);
+  bot.position.y = -0.7;
+  group.add(bot);
+
+  // Visor / eye ring
+  const visorGeo = new THREE.TorusGeometry(0.35, 0.06, 8, 16);
+  const visorMat = new THREE.MeshBasicMaterial({ color: isRed ? 0xff6644 : 0x66bbff });
+  const visor = new THREE.Mesh(visorGeo, visorMat);
+  visor.position.set(0, 0.5, 0.35);
+  visor.rotation.x = Math.PI / 2;
+  group.add(visor);
+
+  // Positioning
+  let x, z;
+  if (isRed) {
+    // Spread on the south side
+    const angle = (index / NUM_RED) * Math.PI - Math.PI / 2;
+    const radius = 35 + (index % 2) * 5;
+    x = Math.cos(angle) * 12 - 5;
+    z = -radius + (index % 3) * 3;
+  } else {
+    // Around the base
+    const angle = (index / NUM_BLUE) * Math.PI * 2;
+    const radius = 10;
+    x = BASE_POS.x + Math.cos(angle) * radius;
+    z = BASE_POS.z + Math.sin(angle) * radius;
+  }
+
+  const groundY = getTerrainHeight(x, z);
+  group.position.set(x, groundY + 1.2, z);
+  scene.add(group);
+
+  // Point light
+  const unitLight = new THREE.PointLight(color, 2, 10);
+  unitLight.position.set(x, groundY + 2.5, z);
+  scene.add(unitLight);
+
+  // Motion trail (line segments)
+  const trailPositions = [];
+  for (let i = 0; i < MAX_TRAIL_POINTS; i++) {
+    trailPositions.push(x, groundY + 0.5, z);
+  }
+  const trailGeo = new THREE.BufferGeometry();
+  trailGeo.setAttribute('position', new THREE.Float32BufferAttribute(trailPositions, 3));
+  const trailMat = new THREE.LineBasicMaterial({
+    color, transparent: true, opacity: 0.4, linewidth: 2
+  });
+  const trail = new THREE.Line(trailGeo, trailMat);
+  scene.add(trail);
+
+  return {
+    group, body: bodyMat, light: unitLight, trail, team,
+    hp: MAX_HP,
+    alive: true,
+    attackTimer: 0,
+    deathTimer: 0,
+    velocity: new THREE.Vector3(),
+    trailIndex: 0,
+    trailTimer: 0,
+    id: `${team}-${index}`,
+    index
+  };
+}
+
+function spawnTeams() {
+  for (let i = 0; i < NUM_RED; i++) redUnits.push(createUnit('red', i));
+  for (let i = 0; i < NUM_BLUE; i++) blueUnits.push(createUnit('blue', i));
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  EXPLOSION POOL (InstancedMesh)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function createExplosionPool() {
+  const particleGeo = new THREE.SphereGeometry(0.12, 6, 6);
+  const particleMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 1
+  });
+
+  // Max concurrent particles: ~2000
+  explosionPool = new THREE.InstancedMesh(particleGeo, particleMat, 2200);
+  explosionPool.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  explosionPool.frustumCulled = false;
+
+  // Start all instances off-screen
+  const dummy = new THREE.Matrix4();
+  dummy.makeTranslation(0, -100, 0);
+  for (let i = 0; i < 2200; i++) {
+    explosionPool.setMatrixAt(i, dummy);
+    explosionPool.setColorAt(i, new THREE.Color(0x000000));
+  }
+  explosionPool.instanceMatrix.needsUpdate = true;
+  explosionPool.instanceColor.needsUpdate = true;
+  scene.add(explosionPool);
+}
+
+function spawnExplosion(position, color1 = 0xff4411, color2 = 0xffaa22) {
+  const count = EXPLOSION_PARTICLES;
+  for (let i = 0; i < count; i++) {
+    // Find free slot
+    const slot = findFreeExplosionSlot();
+    if (slot === -1) break;
+
+    const speed = 2 + Math.random() * 10;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.random() * Math.PI;
+
+    const vx = Math.sin(phi) * Math.cos(theta) * speed;
+    const vy = Math.cos(phi) * speed * 0.7 + Math.random() * 4;
+    const vz = Math.sin(phi) * Math.sin(theta) * speed;
+
+    const life = 0.5 + Math.random() * 1.5;
+    const t = Math.random();
+    const c1 = new THREE.Color(color1);
+    const c2 = new THREE.Color(color2);
+    const smokeColor = new THREE.Color(0x333333);
+    // Some particles are fire, some smoke
+    const isFire = Math.random() > 0.3;
+    const particleColor = isFire ? c1.clone().lerp(c2, t) : smokeColor;
+
+    explosionData[slot] = {
+      active: true,
+      px: position.x, py: position.y + 0.5, pz: position.z,
+      vx, vy, vz,
+      life, maxLife: life,
+      color: particleColor,
+      scale: isFire ? (0.3 + Math.random() * 0.8) : (0.5 + Math.random() * 1.2),
+      isFire
+    };
+  }
+
+  // Shockwave ring
+  const ringGeo = new THREE.TorusGeometry(0.5, 0.15, 8, 32);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: color2, transparent: true, opacity: 0.8
+  });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.position.copy(position);
+  ring.position.y += 0.3;
+  ring.rotation.x = -Math.PI / 2;
+  scene.add(ring);
+  shockwaves.push({ mesh: ring, life: 1.0, speed: 18 });
+
+  // Flash light
+  const flashLight = new THREE.PointLight(color1, 15, 20);
+  flashLight.position.copy(position);
+  flashLight.position.y += 1;
+  scene.add(flashLight);
+  shockwaves.push({ light: flashLight, life: 0.3 });
+}
+
+function findFreeExplosionSlot() {
+  for (let i = 0; i < 2200; i++) {
+    if (!explosionData[i] || !explosionData[i].active) return i;
+  }
+  return -1;
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PROJECTILE SYSTEM
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function fireProjectile(from, to, color) {
+  const projGeo = new THREE.SphereGeometry(0.2, 8, 8);
+  const projMat = new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity: 1
+  });
+  const proj = new THREE.Mesh(projGeo, projMat);
+  proj.position.copy(from);
+  proj.position.y += 1.5;
+  scene.add(proj);
+
+  // Glow sphere
+  const glowGeo = new THREE.SphereGeometry(0.5, 8, 8);
+  const glowMat = new THREE.MeshBasicMaterial({
+    color, transparent: true, opacity: 0.3
+  });
+  const glow = new THREE.Mesh(glowGeo, glowMat);
+  proj.add(glow);
+
+  // Light
+  const projLight = new THREE.PointLight(color, 3, 8);
+  proj.add(projLight);
+
+  // Direction + gravity arc
+  const dir = new THREE.Vector3().subVectors(to, from);
+  const dist = dir.length();
+  dir.normalize();
+
+  // Add arc: velocity has upward component
+  const vel = dir.clone().multiplyScalar(PROJECTILE_SPEED);
+  vel.y += dist * 0.15; // arc height proportional to distance
+
+  // Trail
+  const trailPoints = [];
+  for (let i = 0; i < 12; i++) trailPoints.push(proj.position.clone());
+  const trailGeo = new THREE.BufferGeometry().setFromPoints(trailPoints);
+  const trailMat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.6 });
+  const trailLine = new THREE.Line(trailGeo, trailMat);
+  scene.add(trailLine);
+
+  projectiles.push({
+    mesh: proj, vel, trail: trailLine, trailPoints,
+    target: to.clone(), life: 3.0, color
+  });
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  POST-PROCESSING
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+let vignettePass;
+
+function setupPostProcessing() {
+  composer = new EffectComposer(renderer);
+
+  // Render pass
+  const renderPass = new RenderPass(scene, camera);
+  composer.addPass(renderPass);
+
+  // Bloom
+  const bloomPass = new UnrealBloomPass(
+    new THREE.Vector2(window.innerWidth, window.innerHeight),
+    0.5,  // strength
+    0.4,  // radius
+    0.8   // threshold
+  );
+  composer.addPass(bloomPass);
+
+  // SMAA anti-aliasing
+  const smaaPass = new SMAAPass(
+    window.innerWidth * renderer.getPixelRatio(),
+    window.innerHeight * renderer.getPixelRatio()
+  );
+  composer.addPass(smaaPass);
+
+  // Vignette + film grain
+  vignettePass = new ShaderPass(VignetteFilmShader);
+  composer.addPass(vignettePass);
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  MINIMAP
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function setupMinimap() {
+  const minimapCanvas = document.getElementById('minimap-canvas');
+  minimapRenderer = new THREE.WebGLRenderer({
+    canvas: minimapCanvas, antialias: false, alpha: true
+  });
+  minimapRenderer.setSize(256, 256);
+  minimapRenderer.setClearColor(0x000000, 0);
+
+  minimapCamera = new THREE.OrthographicCamera(-55, 55, 55, -55, 0.1, 300);
+  minimapCamera.position.set(0, 100, 0);
+  minimapCamera.lookAt(0, 0, 0);
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  AI: POTENTIAL FIELD (Red) + INTERCEPTION (Blue)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function updateAI(dt) {
+  // ── RED AI: Potential field approach
+  redUnits.forEach(unit => {
+    if (!unit.alive) return;
+    unit.attackTimer = Math.max(0, unit.attackTimer - dt);
+
+    const pos = unit.group.position;
+    const force = new THREE.Vector3();
+
+    // Attraction to base (strong)
+    const toBase = new THREE.Vector3().subVectors(BASE_POS, pos);
+    const baseDist = toBase.length();
+    toBase.normalize();
+    force.add(toBase.clone().multiplyScalar(UNIT_SPEED * 1.2));
+
+    // Slight repulsion from other red units (avoid clustering)
+    redUnits.forEach(other => {
+      if (other === unit || !other.alive) return;
+      const diff = new THREE.Vector3().subVectors(pos, other.group.position);
+      const d = diff.length();
+      if (d < 4 && d > 0.1) {
+        diff.normalize().multiplyScalar(3.0 / d);
+        force.add(diff);
+      }
+    });
+
+    // Mild repulsion from blue units (evasion, but not too much)
+    blueUnits.forEach(blue => {
+      if (!blue.alive) return;
+      const diff = new THREE.Vector3().subVectors(pos, blue.group.position);
+      const d = diff.length();
+      if (d < 8 && d > 0.1) {
+        diff.normalize().multiplyScalar(1.5 / d);
+        force.add(diff);
+      }
+    });
+
+    // Apply movement
+    unit.velocity.lerp(force, dt * 3);
+    unit.velocity.y = 0;
+    const moveSpeed = UNIT_SPEED * dt;
+    pos.x += unit.velocity.x * moveSpeed;
+    pos.z += unit.velocity.z * moveSpeed;
+
+    // Keep on terrain
+    const ty = getTerrainHeight(pos.x, pos.z);
+    pos.y = ty + 1.2;
+
+    // Rotate to face movement direction
+    if (unit.velocity.lengthSq() > 0.1) {
+      const angle = Math.atan2(unit.velocity.x, unit.velocity.z);
+      unit.group.rotation.y = THREE.MathUtils.lerp(
+        unit.group.rotation.y, angle, dt * 5
+      );
+    }
+
+    // Attack nearest blue
+    let nearestBlue = null, nearestDist = Infinity;
+    blueUnits.forEach(b => {
+      if (!b.alive) return;
+      const d = pos.distanceTo(b.group.position);
+      if (d < nearestDist) { nearestDist = d; nearestBlue = b; }
+    });
+
+    if (nearestBlue && nearestDist < ATTACK_RANGE * 3 && unit.attackTimer <= 0) {
+      fireProjectile(pos, nearestBlue.group.position, 0xff4422);
+      dealDamage(unit, nearestBlue);
+      unit.attackTimer = ATTACK_COOLDOWN;
+    }
+  });
+
+  // ── BLUE AI: Interception steering
+  blueUnits.forEach(unit => {
+    if (!unit.alive) return;
+    unit.attackTimer = Math.max(0, unit.attackTimer - dt);
+
+    const pos = unit.group.position;
+
+    // Find nearest red
+    let nearestRed = null, nearestDist = Infinity;
+    redUnits.forEach(r => {
+      if (!r.alive) return;
+      const d = pos.distanceTo(r.group.position);
+      if (d < nearestDist) { nearestDist = d; nearestRed = r; }
+    });
+
+    if (nearestRed) {
+      // Interception: predict where red will be
+      const redPos = nearestRed.group.position;
+      const redVel = nearestRed.velocity;
+      const timeToIntercept = nearestDist / (UNIT_SPEED * 1.3);
+      const predictedPos = new THREE.Vector3(
+        redPos.x + redVel.x * timeToIntercept * 0.5,
+        redPos.y,
+        redPos.z + redVel.z * timeToIntercept * 0.5
+      );
+
+      const toTarget = new THREE.Vector3().subVectors(predictedPos, pos);
+      toTarget.y = 0;
+      const dist = toTarget.length();
+
+      if (dist > 2) {
+        toTarget.normalize();
+        const blueSpeed = UNIT_SPEED * 1.15;
+        unit.velocity.lerp(toTarget.multiplyScalar(blueSpeed), dt * 4);
+        unit.velocity.y = 0;
+        pos.x += unit.velocity.x * dt;
+        pos.z += unit.velocity.z * dt;
+      }
+
+      // Keep on terrain
+      const ty = getTerrainHeight(pos.x, pos.z);
+      pos.y = ty + 1.2;
+
+      // Rotate
+      if (unit.velocity.lengthSq() > 0.1) {
+        const angle = Math.atan2(unit.velocity.x, unit.velocity.z);
+        unit.group.rotation.y = THREE.MathUtils.lerp(unit.group.rotation.y, angle, dt * 5);
+      }
+
+      // Attack
+      if (nearestDist < ATTACK_RANGE * 3 && unit.attackTimer <= 0) {
+        fireProjectile(pos, nearestRed.group.position, 0x2288ff);
+        dealDamage(unit, nearestRed);
+        unit.attackTimer = ATTACK_COOLDOWN;
+      }
+    } else {
+      // Return to base
+      const toBase = new THREE.Vector3().subVectors(BASE_POS, pos);
+      toBase.y = 0;
+      if (toBase.length() > 5) {
+        toBase.normalize().multiplyScalar(UNIT_SPEED * 0.5);
+        unit.velocity.lerp(toBase, dt * 2);
+        pos.x += unit.velocity.x * dt;
+        pos.z += unit.velocity.z * dt;
+        const ty = getTerrainHeight(pos.x, pos.z);
+        pos.y = ty + 1.2;
+      }
+    }
+  });
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  DAMAGE + DEATH
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function dealDamage(attacker, target) {
+  target.hp -= DAMAGE_PER_HIT;
+
+  // Scale down with HP
+  const scale = Math.max(0.35, target.hp / MAX_HP);
+  target.group.scale.setScalar(scale);
+  target.light.intensity = 2 * scale;
+
+  if (target.hp <= 0 && target.alive) {
+    target.alive = false;
+    target.deathTimer = 2.0;
+
+    // Explosion
+    spawnExplosion(
+      target.group.position,
+      target.team === 'red' ? 0xff2211 : 0x2266ff,
+      target.team === 'red' ? 0xff8844 : 0x44aaff
+    );
+
+    // Kill feed
+    addKillFeed(attacker, target);
+  }
+}
+
+function addKillFeed(killer, victim) {
+  const feed = document.getElementById('kill-feed');
+  feed.style.display = 'block';
+
+  const entry = document.createElement('div');
+  entry.className = 'kill-entry';
+  const kColor = killer.team === 'red' ? '#ff4455' : '#4499ff';
+  const vColor = victim.team === 'red' ? '#ff4455' : '#4499ff';
+  entry.innerHTML = `<span style="color:${kColor}">${killer.id}</span> <span style="opacity:0.4">eliminated</span> <span style="color:${vColor}">${victim.id}</span>`;
+  feed.prepend(entry);
+
+  killFeedEntries.push({ el: entry, life: 5.0 });
+
+  // Keep max 5
+  while (feed.children.length > 5) {
+    feed.removeChild(feed.lastChild);
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  UPDATE UNITS (sync, trails, death)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function updateUnits(dt) {
+  const allUnits = [...redUnits, ...blueUnits];
+
+  allUnits.forEach(unit => {
+    if (unit.alive) {
+      // Update light position
+      unit.light.position.copy(unit.group.position);
+      unit.light.position.y += 2;
+
+      // Emissive pulsing
+      const pulse = 0.5 + Math.sin(elapsed * 4 + unit.index * 1.5) * 0.3;
+      unit.body.emissiveIntensity = pulse;
+
+      // Trail update
+      unit.trailTimer += dt;
+      if (unit.trailTimer > 0.05) {
+        unit.trailTimer = 0;
+        const trailPos = unit.trail.geometry.attributes.position;
+        // Shift all positions down
+        for (let i = MAX_TRAIL_POINTS - 1; i > 0; i--) {
+          trailPos.setXYZ(i,
+            trailPos.getX(i - 1),
+            trailPos.getY(i - 1),
+            trailPos.getZ(i - 1)
+          );
+        }
+        trailPos.setXYZ(0,
+          unit.group.position.x,
+          unit.group.position.y - 0.5,
+          unit.group.position.z
+        );
+        trailPos.needsUpdate = true;
+      }
+
+    } else if (unit.deathTimer > 0) {
+      unit.deathTimer -= dt;
+      const alpha = Math.max(0, unit.deathTimer / 2.0);
+
+      // Float up and fade
+      unit.group.position.y += dt * 3;
+      unit.group.children.forEach(child => {
+        if (child.material) {
+          child.material.transparent = true;
+          child.material.opacity = alpha;
+        }
+      });
+      unit.light.intensity = alpha * 2;
+      unit.trail.material.opacity = alpha * 0.3;
+
+      // Spin
+      unit.group.rotation.y += dt * 5;
+      unit.group.rotation.z += dt * 3;
+
+      if (unit.deathTimer <= 0) {
+        scene.remove(unit.group);
+        scene.remove(unit.light);
+        scene.remove(unit.trail);
+      }
+    }
+  });
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  UPDATE PROJECTILES
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function updateProjectiles(dt) {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    p.life -= dt;
+
+    // Apply gravity
+    p.vel.y -= 15 * dt;
+
+    // Move
+    p.mesh.position.x += p.vel.x * dt;
+    p.mesh.position.y += p.vel.y * dt;
+    p.mesh.position.z += p.vel.z * dt;
+
+    // Trail update
+    p.trailPoints.pop();
+    p.trailPoints.unshift(p.mesh.position.clone());
+    p.trail.geometry.setFromPoints(p.trailPoints);
+
+    // Check if hit ground or expired
+    const groundY = getTerrainHeight(p.mesh.position.x, p.mesh.position.z);
+    if (p.mesh.position.y < groundY || p.life <= 0) {
+      // Small impact
+      spawnExplosion(p.mesh.position, p.color, 0xffcc44);
+      scene.remove(p.mesh);
+      scene.remove(p.trail);
+      projectiles.splice(i, 1);
+    }
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  UPDATE EXPLOSIONS (InstancedMesh particles)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const _dummy = new THREE.Object3D();
+const _color = new THREE.Color();
+
+function updateExplosions(dt) {
+  let needsUpdate = false;
+
+  for (let i = 0; i < explosionData.length; i++) {
+    const p = explosionData[i];
+    if (!p || !p.active) continue;
+
+    p.life -= dt;
+    if (p.life <= 0) {
+      p.active = false;
+      _dummy.position.set(0, -100, 0);
+      _dummy.scale.setScalar(0);
+      _dummy.updateMatrix();
+      explosionPool.setMatrixAt(i, _dummy.matrix);
+      needsUpdate = true;
+      continue;
+    }
+
+    // Physics
+    p.vy -= 9.8 * dt;
+    p.vx *= (1 - dt * 1.5); // drag
+    p.vz *= (1 - dt * 1.5);
+    p.px += p.vx * dt;
+    p.py += p.vy * dt;
+    p.pz += p.vz * dt;
+
+    // Floor bounce
+    const groundY = getTerrainHeight(p.px, p.pz);
+    if (p.py < groundY + 0.1) {
+      p.py = groundY + 0.1;
+      p.vy *= -0.3;
+    }
+
+    const lifeRatio = p.life / p.maxLife;
+    const s = p.scale * lifeRatio;
+
+    _dummy.position.set(p.px, p.py, p.pz);
+    _dummy.scale.setScalar(s);
+    _dummy.updateMatrix();
+    explosionPool.setMatrixAt(i, _dummy.matrix);
+
+    // Color: fire particles fade from bright to dark
+    if (p.isFire) {
+      _color.copy(p.color).multiplyScalar(lifeRatio * 2);
+    } else {
+      _color.set(0x222222).multiplyScalar(lifeRatio);
+    }
+    explosionPool.setColorAt(i, _color);
+
+    needsUpdate = true;
+  }
+
+  if (needsUpdate) {
+    explosionPool.instanceMatrix.needsUpdate = true;
+    if (explosionPool.instanceColor) explosionPool.instanceColor.needsUpdate = true;
+  }
+
+  // Update shockwaves
+  for (let i = shockwaves.length - 1; i >= 0; i--) {
+    const sw = shockwaves[i];
+    sw.life -= dt * 2;
+
+    if (sw.mesh) {
+      const scale = 1 + (1 - sw.life) * sw.speed;
+      sw.mesh.scale.setScalar(scale);
+      sw.mesh.material.opacity = Math.max(0, sw.life * 0.8);
+      if (sw.life <= 0) {
+        scene.remove(sw.mesh);
+        sw.mesh.geometry.dispose();
+        sw.mesh.material.dispose();
+        shockwaves.splice(i, 1);
+      }
+    } else if (sw.light) {
+      sw.light.intensity = Math.max(0, sw.life * 15 / 0.3);
+      if (sw.life <= 0) {
+        scene.remove(sw.light);
+        shockwaves.splice(i, 1);
+      }
+    }
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  UPDATE BASE
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function updateBase(dt) {
+  if (!baseMeshes.crystal) return;
+
+  // Crystal rotation + bob
+  baseMeshes.crystal.rotation.y += dt * 0.8;
+  baseMeshes.crystal.rotation.x = Math.sin(elapsed * 1.2) * 0.15;
+  baseMeshes.crystal.position.y = BASE_POS.y + 11 + Math.sin(elapsed * 1.5) * 0.4;
+
+  // Crystal light pulse
+  baseMeshes.crystalLight.intensity = 4 + Math.sin(elapsed * 3) * 2;
+
+  // Shield dome animation
+  if (baseMeshes.shield && baseMeshes.shield.material.uniforms) {
+    baseMeshes.shield.material.uniforms.time.value = elapsed;
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  CINEMATIC CAMERA
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+let cameraTarget = new THREE.Vector3(0, 5, 10);
+let cameraAngle = 0;
+let cameraRadius = 55;
+let cameraHeight = 30;
+let cameraZoomTarget = 55;
+let combatFocusTimer = 0;
+let combatFocusPos = new THREE.Vector3();
+
+function updateCamera(dt) {
+  // Smooth cinematic orbit with easing
+  const orbitSpeed = slowMotion ? 0.02 : 0.06;
+  cameraAngle += orbitSpeed * dt;
+
+  // Auto-zoom on combat
+  combatFocusTimer -= dt;
+  const allAlive = [...redUnits.filter(u => u.alive), ...blueUnits.filter(u => u.alive)];
+
+  // Find center of action
+  if (allAlive.length > 0) {
+    const center = new THREE.Vector3();
+    allAlive.forEach(u => center.add(u.group.position));
+    center.divideScalar(allAlive.length);
+    cameraTarget.lerp(center, dt * 0.5);
+    cameraTarget.y = Math.max(3, cameraTarget.y);
+  }
+
+  // Check for recent combat -> zoom in
+  const hasRecentCombat = projectiles.length > 0 || shockwaves.length > 0;
+  if (hasRecentCombat) {
+    cameraZoomTarget = 35;
+    cameraHeight = 20;
+  } else {
+    cameraZoomTarget = 55;
+    cameraHeight = 30;
+  }
+
+  // Smooth zoom
+  cameraRadius += (cameraZoomTarget - cameraRadius) * dt * 1.5;
+
+  // Orbit position
+  const cx = cameraTarget.x + Math.sin(cameraAngle) * cameraRadius;
+  const cz = cameraTarget.z + Math.cos(cameraAngle) * cameraRadius;
+  const cy = cameraHeight + Math.sin(elapsed * 0.2) * 3;
+
+  // Ease camera position
+  camera.position.x += (cx - camera.position.x) * dt * 2;
+  camera.position.y += (cy - camera.position.y) * dt * 2;
+  camera.position.z += (cz - camera.position.z) * dt * 2;
+
+  camera.lookAt(cameraTarget);
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  HUD UPDATE
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function updateHUD(dt) {
+  // Timer
+  const minutes = Math.floor(elapsed / 60);
+  const seconds = Math.floor(elapsed % 60);
+  document.getElementById('timer').textContent =
+    String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+
+  const redAlive = redUnits.filter(u => u.alive).length;
+  const blueAlive = blueUnits.filter(u => u.alive).length;
+  document.getElementById('red-count').textContent = redAlive;
+  document.getElementById('blue-count').textContent = blueAlive;
+
+  // Team HP bars
+  const redTotalHP = redUnits.reduce((s, u) => s + (u.alive ? u.hp : 0), 0);
+  const blueTotalHP = blueUnits.reduce((s, u) => s + (u.alive ? u.hp : 0), 0);
+  const redMaxHP = NUM_RED * MAX_HP;
+  const blueMaxHP = NUM_BLUE * MAX_HP;
+  document.getElementById('red-hp').style.width = (redTotalHP / redMaxHP * 100) + '%';
+  document.getElementById('blue-hp').style.width = (blueTotalHP / blueMaxHP * 100) + '%';
+
+  // Phase label
+  const phaseEl = document.getElementById('phase-label');
+  if (elapsed < 3) phaseEl.textContent = 'Deployment Phase';
+  else if (redAlive > 0 && blueAlive > 0) phaseEl.textContent = 'Combat Active';
+  else phaseEl.textContent = 'Battle Concluded';
+
+  // Kill feed decay
+  for (let i = killFeedEntries.length - 1; i >= 0; i--) {
+    killFeedEntries[i].life -= dt;
+    if (killFeedEntries[i].life <= 0) {
+      killFeedEntries[i].el.style.opacity = '0';
+      killFeedEntries[i].el.style.transition = 'opacity 0.5s';
+      setTimeout(() => {
+        if (killFeedEntries[i] && killFeedEntries[i].el.parentNode) {
+          killFeedEntries[i].el.parentNode.removeChild(killFeedEntries[i].el);
+        }
+      }, 500);
+      killFeedEntries.splice(i, 1);
+    }
+  }
+
+  // Win condition
+  if (!gameOver) {
+    if (redAlive === 0 && elapsed > 2) {
+      endGame('Blue Wins', 'All attackers eliminated');
+    } else if (blueAlive === 0 && elapsed > 2) {
+      endGame('Red Wins', 'All defenders eliminated');
+    } else {
+      // Check if red reached base
+      const redAtBase = redUnits.some(u => {
+        if (!u.alive) return false;
+        const d = u.group.position.distanceTo(BASE_POS);
+        return d < 5;
+      });
+      if (redAtBase && blueAlive === 0) {
+        endGame('Red Wins', 'Base captured');
+      }
+    }
+  }
+}
+
+function endGame(title, sub) {
+  gameOver = true;
+  slowMotion = true;
+  slowMotionTimer = 3.0; // 3 seconds of slow-mo before full stop
+
+  document.getElementById('winner-text').textContent = title;
+  document.getElementById('winner-text').style.color =
+    title.includes('Red') ? '#ff4455' : '#4499ff';
+  document.getElementById('winner-sub').textContent = sub;
+
+  setTimeout(() => {
+    document.getElementById('overlay').classList.add('visible');
+    document.getElementById('restart-btn').style.display = 'block';
+  }, 1500);
+
+  updateStatus('Battle concluded -- ' + title);
+}
+
+function updateStatus(text) {
+  document.getElementById('status-text').textContent = text;
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  MAIN ANIMATION LOOP
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function animate() {
+  requestAnimationFrame(animate);
+
+  let rawDt = Math.min(clock.getDelta(), 0.05);
+
+  // Slow motion effect
+  let dt = rawDt;
+  if (slowMotion) {
+    slowMotionTimer -= rawDt;
+    dt = rawDt * 0.15; // 15% speed
+    if (slowMotionTimer <= 0) {
+      slowMotion = false;
+    }
+  }
+
+  if (!gameOver || slowMotion) {
+    elapsed += dt;
+  }
+
+  // Water animation
+  if (water && water.material.uniforms['time']) {
+    water.material.uniforms['time'].value += rawDt * 0.5;
+  }
+
+  // Vignette time
+  if (vignettePass) {
+    vignettePass.uniforms.time.value = elapsed;
+  }
+
+  // Game logic
+  if (!gameOver || slowMotion) {
+    updateAI(dt);
+  }
+  updateUnits(dt);
+  updateProjectiles(dt);
+  updateExplosions(dt);
+  updateBase(dt);
+  updateCamera(dt);
+  updateHUD(dt);
+
+  // ── Main render
+  composer.render();
+
+  // ── Minimap render
+  if (minimapRenderer && minimapCamera) {
+    // Temporarily hide some effects for clean minimap
+    if (sky) sky.visible = false;
+    if (water) water.visible = false;
+    const origFog = scene.fog;
+    scene.fog = null;
+
+    minimapRenderer.render(scene, minimapCamera);
+
+    if (sky) sky.visible = true;
+    if (water) water.visible = true;
+    scene.fog = origFog;
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  RESIZE
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function onResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  RESTART
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function restartSimulation() {
+  // Clean up units
+  [...redUnits, ...blueUnits].forEach(u => {
+    if (u.group.parent) scene.remove(u.group);
+    if (u.light.parent) scene.remove(u.light);
+    if (u.trail.parent) scene.remove(u.trail);
+  });
+
+  // Clean up projectiles
+  projectiles.forEach(p => {
+    scene.remove(p.mesh);
+    scene.remove(p.trail);
+  });
+
+  // Clean up shockwaves
+  shockwaves.forEach(sw => {
+    if (sw.mesh) scene.remove(sw.mesh);
+    if (sw.light) scene.remove(sw.light);
+  });
+
+  // Reset explosion data
+  const hideMat = new THREE.Matrix4().makeTranslation(0, -100, 0);
+  for (let i = 0; i < explosionData.length; i++) {
+    if (explosionData[i]) explosionData[i].active = false;
+    explosionPool.setMatrixAt(i, hideMat);
+  }
+  explosionPool.instanceMatrix.needsUpdate = true;
+  explosionData = [];
+
+  // Reset state
+  redUnits = [];
+  blueUnits = [];
+  projectiles = [];
+  shockwaves = [];
+  killFeedEntries = [];
+  elapsed = 0;
+  gameOver = false;
+  slowMotion = false;
+  cameraAngle = 0;
+  cameraRadius = 55;
+  cameraHeight = 30;
+  cameraZoomTarget = 55;
+  cameraTarget.set(0, 5, 10);
+
+  // Clear kill feed DOM
+  const feed = document.getElementById('kill-feed');
+  feed.innerHTML = '';
+  feed.style.display = 'none';
+
+  document.getElementById('overlay').classList.remove('visible');
+  document.getElementById('restart-btn').style.display = 'none';
+
+  spawnTeams();
+  updateStatus('Battle recommencing');
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  START
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+init();
+
+</script>
+</body>
+</html>
