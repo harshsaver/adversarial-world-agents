@@ -621,6 +621,28 @@ let geminiCallCount = 0; // throttle: only call every other turn
 let reasoningStore = {}; // turn -> {red: {saw,plan,risk,did}, blue: {saw,plan,risk,did}}
 let screenshotStore = {}; // turn -> base64 screenshot
 
+// ============================================================
+// AGENT CONTROL — Gemini picks moves, units execute them
+// ============================================================
+const AGENT_MOVES = [
+  'ATTACK_NEAREST',    // rush closest enemy
+  'ATTACK_WEAKEST',    // target lowest HP enemy
+  'DEFEND_OBJECTIVE',  // fall back to base/zone/center
+  'FLANK_LEFT',        // swing units to top of map, then engage
+  'FLANK_RIGHT',       // swing units to bottom of map, then engage
+  'SPREAD',            // maximize spacing between friendlies
+  'GROUP_UP',          // cluster for concentrated fire
+  'RETREAT',           // pull away from all enemies
+  'HOLD_POSITION',     // stop moving, shoot anything in range
+];
+
+let redMove = 'ATTACK_NEAREST';
+let blueMove = 'DEFEND_OBJECTIVE';
+let agentControlEnabled = true; // set false to revert to hardcoded AI
+let agentInFlight = false; // prevent overlapping agent calls
+let lastAgentCallTime = 0; // track when last call was made
+const AGENT_CALL_INTERVAL = 2000; // ms between agent API calls
+
 // Training pipeline state
 let pipelineCapturing = false;
 let pipelineTimer = null;
@@ -996,6 +1018,129 @@ function buildIframeStateSummary(turn) {
 }
 
 // Call Gemini for real tactical commentary (MULTIMODAL: screenshot + text)
+// Build a compact state string for one team's perspective
+function getAgentPerspective(team) {
+  if (games.length === 0) return 'No game data available.';
+  let lines = [];
+  for (const g of games) {
+    if (g.over) continue;
+    const sc = g.sc;
+    const friendly = team === 'red' ? g.aU : g.bU;
+    const enemy = team === 'red' ? g.bU : g.aU;
+    const fAlive = friendly.filter(u => u.alive);
+    const eAlive = enemy.filter(u => u.alive);
+    if (fAlive.length === 0 && eAlive.length === 0) continue;
+
+    const fAvgHp = fAlive.length ? Math.round(fAlive.reduce((s,u) => s + u.hp/u.maxHP*100, 0) / fAlive.length) : 0;
+    const eAvgHp = eAlive.length ? Math.round(eAlive.reduce((s,u) => s + u.hp/u.maxHP*100, 0) / eAlive.length) : 0;
+    const fCenter = fAlive.length ? { x: Math.round(fAlive.reduce((s,u)=>s+u.x,0)/fAlive.length), y: Math.round(fAlive.reduce((s,u)=>s+u.y,0)/fAlive.length) } : null;
+    const eCenter = eAlive.length ? { x: Math.round(eAlive.reduce((s,u)=>s+u.x,0)/eAlive.length), y: Math.round(eAlive.reduce((s,u)=>s+u.y,0)/eAlive.length) } : null;
+
+    // Find weakest enemy
+    let weakest = null;
+    for (const u of eAlive) { if (!weakest || u.hp < weakest.hp) weakest = u; }
+
+    let line = `${sc.name}(${sc.mode},${Math.round(g.timer)}s): `;
+    line += `You:${fAlive.length}units@${fAvgHp}%hp`;
+    if (fCenter) line += `@(${fCenter.x},${fCenter.y})`;
+    line += ` Enemy:${eAlive.length}units@${eAvgHp}%hp`;
+    if (eCenter) line += `@(${eCenter.x},${eCenter.y})`;
+    if (weakest) line += ` weakest_enemy:${Math.round(weakest.hp/weakest.maxHP*100)}%hp@(${Math.round(weakest.x)},${Math.round(weakest.y)})`;
+    if (sc.mode === 'base') line += ` objective@(${g.baseX},${g.baseY})`;
+    if (sc.mode === 'koth') line += ` zone@(${g.zoneX},${g.zoneY})`;
+    line += ` map:${g.W}x${g.H}`;
+    lines.push(line);
+  }
+  return lines.length ? lines.join('\n') : 'All scenarios ended.';
+}
+
+async function requestSingleAgentMove(team, state) {
+  const prompt = `You are the ${team.toUpperCase()} commander in a real-time war simulation. Pick ONE move for your team.
+
+STATE:
+${state}
+
+AVAILABLE MOVES: ${AGENT_MOVES.join(', ')}
+
+Move descriptions:
+- ATTACK_NEAREST: Rush closest enemy unit
+- ATTACK_WEAKEST: Focus fire on lowest HP enemy
+- DEFEND_OBJECTIVE: Fall back to defend base/zone/center
+- FLANK_LEFT: Move units to top of map, then attack from above
+- FLANK_RIGHT: Move units to bottom of map, then attack from below
+- SPREAD: Spread units apart to avoid concentrated enemy fire
+- GROUP_UP: Cluster units together for focused firepower
+- RETREAT: Pull all units away from enemies
+- HOLD_POSITION: Stop moving, shoot enemies in range
+
+Respond JSON: {"move":"MOVE_NAME","reasoning":{"saw":"...","plan":"...","risk":"...","did":"..."}}
+Keep each reasoning line under 12 words.`;
+
+  const resp = await fetch(OPENROUTER_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENROUTER_API_KEY}` },
+    body: JSON.stringify({
+      model: REASONING_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.6,
+      max_tokens: 256,
+    })
+  });
+
+  if (!resp.ok) throw new Error(`${resp.status}: ${(await resp.text()).substring(0, 100)}`);
+  const data = await resp.json();
+  const text = data.choices?.[0]?.message?.content || '';
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('No JSON');
+  const parsed = JSON.parse(match[0]);
+
+  // Validate move
+  const move = AGENT_MOVES.includes(parsed.move) ? parsed.move : 'ATTACK_NEAREST';
+  return { move, reasoning: parsed.reasoning || { saw:'--', plan:'--', risk:'--', did:'--' } };
+}
+
+async function requestAgentMoves() {
+  if (agentInFlight || !agentControlEnabled || games.length === 0) return;
+  const now = performance.now();
+  if (now - lastAgentCallTime < AGENT_CALL_INTERVAL) return;
+
+  agentInFlight = true;
+  lastAgentCallTime = now;
+  const turn = turnNumber;
+
+  const redState = getAgentPerspective('red');
+  const blueState = getAgentPerspective('blue');
+
+  console.log(`%c[AGENT] Turn ${turn} — requesting moves for RED + BLUE (parallel)`, 'color: #ffaa00; font-weight: bold');
+  console.log(`[AGENT] RED sees:`, redState.substring(0, 200));
+  console.log(`[AGENT] BLU sees:`, blueState.substring(0, 200));
+
+  const t0 = performance.now();
+  try {
+    const [redResult, blueResult] = await Promise.all([
+      requestSingleAgentMove('red', redState),
+      requestSingleAgentMove('blue', blueState),
+    ]);
+
+    const elapsed = (performance.now() - t0).toFixed(0);
+    redMove = redResult.move;
+    blueMove = blueResult.move;
+
+    console.log(`%c[AGENT] Moves received (${elapsed}ms): RED=${redMove} BLUE=${blueMove}`, 'color: #ffaa00; font-weight: bold');
+    console.log(`[AGENT] RED reasoning:`, redResult.reasoning);
+    console.log(`[AGENT] BLU reasoning:`, blueResult.reasoning);
+
+    // Feed reasoning into sidebar
+    if (redResult.reasoning) insertReasoningEntry('red', turn, { ...redResult.reasoning, did: `${redMove}: ${redResult.reasoning.did || '--'}` });
+    if (blueResult.reasoning) insertReasoningEntry('blue', turn, { ...blueResult.reasoning, did: `${blueMove}: ${blueResult.reasoning.did || '--'}` });
+
+  } catch (err) {
+    console.error(`[AGENT] Failed (${(performance.now()-t0).toFixed(0)}ms):`, err.message);
+  } finally {
+    agentInFlight = false;
+  }
+}
+
 async function requestGeminiReasoning(turn) {
   if (geminiInFlight) {
     console.log(`[GEMINI] Turn ${turn} — skipped (previous request still in-flight)`);
@@ -1340,7 +1485,6 @@ function buildTacticalPrompt(state) {
 // Image generation models to try in order
 const IMAGE_MODELS = [
   'google/gemini-2.5-flash-image',
-  'google/gemini-2.0-flash-exp-image-generation',
   'google/gemini-3.1-flash-image-preview',
 ];
 
@@ -1388,6 +1532,18 @@ async function tryImageModel(modelName, prompt) {
       else if (part.type === 'image') {
         if (part.source?.data) imageData = `data:${part.source.media_type || 'image/png'};base64,${part.source.data}`;
         else if (part.data) imageData = `data:image/png;base64,${part.data}`;
+      }
+    }
+  }
+
+  // OpenRouter returns images in msg.images array (not in msg.content)
+  if (!imageData && Array.isArray(msg?.images)) {
+    console.log(`[NANOBANANA] ${modelName} — found msg.images array with ${msg.images.length} entries`);
+    for (const img of msg.images) {
+      if (img.type === 'image_url' && img.image_url?.url) {
+        imageData = img.image_url.url;
+        console.log(`[NANOBANANA] ${modelName} — extracted image from msg.images`);
+        break;
       }
     }
   }
@@ -1965,36 +2121,79 @@ function rcCol(rx,ry,rw,rh,cx,cy,cr){const nx=clp(cx,rx,rx+rw),ny=clp(cy,ry,ry+r
 function pushOut(u,obs){for(const o of obs){if(rcCol(o.x,o.y,o.w,o.h,u.x,u.y,u.r)){const cx=o.x+o.w/2,cy=o.y+o.h/2;const n=nrm(u.x-cx,u.y-cy);u.x+=n.x*3;u.y+=n.y*3;const dot=u.vx*n.x+u.vy*n.y;if(dot<0){u.vx-=dot*n.x;u.vy-=dot*n.y;}}}}
 function lineBlk(ax,ay,bx,by,obs){const d=Math.hypot(bx-ax,by-ay);const steps=Math.ceil(d/18);for(let i=1;i<steps;i++){const t=i/steps;const px=ax+(bx-ax)*t,py=ay+(by-ay)*t;for(const o of obs){if(px>=o.x&&px<=o.x+o.w&&py>=o.y&&py<=o.y+o.h)return true;}}return false;}
 
+// Find weakest alive enemy
+function weakest(u,ts){let b=null,bh=Infinity;for(const t of ts){if(!t.alive)continue;if(t.hp<bh){bh=t.hp;b=t;}}return b;}
+// Team centroid
+function centroid(units){const alive=units.filter(u=>u.alive);if(!alive.length)return null;return{x:alive.reduce((s,u)=>s+u.x,0)/alive.length,y:alive.reduce((s,u)=>s+u.y,0)/alive.length};}
+
+function applyMove(u, move, friendlies, enemies, g) {
+  const sc = g.sc;
+  const nb = nearest(u, enemies);
+  const wk = weakest(u, enemies);
+  const fc = centroid(friendlies);
+  const ec = centroid(enemies);
+
+  switch (move) {
+    case 'ATTACK_NEAREST':
+      if (nb) steer(u, nb.x, nb.y, 0.1);
+      break;
+    case 'ATTACK_WEAKEST':
+      if (wk) steer(u, wk.x, wk.y, 0.1);
+      else if (nb) steer(u, nb.x, nb.y, 0.08);
+      break;
+    case 'DEFEND_OBJECTIVE':
+      if (sc.mode === 'koth') steer(u, g.zoneX, g.zoneY, 0.09);
+      else if (sc.mode === 'base') steer(u, g.baseX, g.baseY, 0.09);
+      else if (fc) steer(u, g.W/2, g.H/2, 0.07);
+      if (nb && dst(u, nb) < SR * 0.8) steer(u, nb.x, nb.y, 0.05);
+      break;
+    case 'FLANK_LEFT':
+      if (ec) steer(u, ec.x, 20, 0.09);
+      else if (nb) steer(u, nb.x, 20, 0.08);
+      if (u.y < 40 && nb) steer(u, nb.x, nb.y, 0.08);
+      break;
+    case 'FLANK_RIGHT':
+      if (ec) steer(u, ec.x, g.H - 20, 0.09);
+      else if (nb) steer(u, nb.x, g.H - 20, 0.08);
+      if (u.y > g.H - 40 && nb) steer(u, nb.x, nb.y, 0.08);
+      break;
+    case 'SPREAD':
+      sep(u, friendlies); sep(u, friendlies); // double separation force
+      if (nb && dst(u, nb) < SR) steer(u, nb.x, nb.y, 0.03);
+      break;
+    case 'GROUP_UP':
+      if (fc) steer(u, fc.x, fc.y, 0.1);
+      if (nb && dst(u, nb) < SR) steer(u, nb.x, nb.y, 0.04);
+      break;
+    case 'RETREAT':
+      if (nb) steer(u, u.x - (nb.x - u.x), u.y - (nb.y - u.y), 0.12);
+      else if (ec) steer(u, u.x - (ec.x - u.x), u.y - (ec.y - u.y), 0.1);
+      break;
+    case 'HOLD_POSITION':
+      u.vx *= 0.85; u.vy *= 0.85;
+      break;
+    default:
+      if (nb) steer(u, nb.x, nb.y, 0.08);
+  }
+}
+
 function updateGame(g,dt){
   if(g.over){g.restartCD--;if(g.restartCD<=0)initGame(g);updParts(g);return;}
   g.timer-=dt;g.fc++;
-  const sc=g.sc,isDM=sc.mode==='deathmatch'||sc.mode==='swarm',isKoth=sc.mode==='koth';
+
+  // Apply Gemini-chosen moves (or fallback to ATTACK_NEAREST)
+  const rMove = agentControlEnabled ? redMove : 'ATTACK_NEAREST';
+  const bMove = agentControlEnabled ? blueMove : 'ATTACK_NEAREST';
 
   for(const u of g.aU){if(!u.alive)continue;
-    const nb=nearest(u,g.bU);
-    if(isDM){if(nb)steer(u,nb.x,nb.y,0.08);}
-    else if(isKoth){
-      if(nb&&dst(u,nb)<SR*1.2)steer(u,nb.x,nb.y,0.07);
-      else steer(u,g.zoneX,g.zoneY,0.08);
-    } else {
-      if(nb&&dst(u,nb)<SR*1.2)steer(u,nb.x,nb.y,0.07);
-      else steer(u,g.baseX,g.baseY,0.1);
-    }
+    applyMove(u, rMove, g.aU, g.bU, g);
     avoidObs(u,g.obs);sep(u,g.aU);sep(u,g.bU);
     if(u.x<20)u.vx+=0.4;if(u.x>g.W-20)u.vx-=0.4;
     if(u.y<20)u.vy+=0.4;if(u.y>g.H-20)u.vy-=0.4;
     updUnit(u,g);tryShoot(u,g.bU,g,'A');
   }
   for(const u of g.bU){if(!u.alive)continue;
-    const nr=nearest(u,g.aU);
-    if(isDM){if(nr)steer(u,nr.x,nr.y,0.08);}
-    else if(isKoth){
-      if(nr&&dst(u,nr)<SR*1.3)steer(u,nr.x,nr.y,0.09);
-      else steer(u,g.zoneX,g.zoneY,0.08);
-    } else {
-      if(nr&&dst(u,nr)<SR*1.3)steer(u,nr.x,nr.y,0.09);
-      else{u.pa+=0.007;steer(u,g.baseX+Math.cos(u.pa)*80,g.baseY+Math.sin(u.pa)*80,0.05);}
-    }
+    applyMove(u, bMove, g.bU, g.aU, g);
     avoidObs(u,g.obs);sep(u,g.bU);sep(u,g.aU);
     if(u.x<20)u.vx+=0.4;if(u.x>g.W-20)u.vx-=0.4;
     if(u.y<20)u.vy+=0.4;if(u.y>g.H-20)u.vy-=0.4;
