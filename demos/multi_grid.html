@@ -475,6 +475,27 @@
     </select>
   </div>
 
+  <div style="display:flex; gap:16px; margin-bottom:20px;">
+    <div class="config-scenario" style="margin-bottom:0;">
+      <div class="config-section-label">Difficulty</div>
+      <select id="difficulty-select">
+        <option value="easy">Easy</option>
+        <option value="medium" selected>Medium</option>
+        <option value="hard">Hard</option>
+        <option value="extreme">Extreme</option>
+      </select>
+    </div>
+    <div class="config-scenario" style="margin-bottom:0;">
+      <div class="config-section-label">Agent Strategy</div>
+      <select id="agent-select">
+        <option value="adaptive" selected>Adaptive</option>
+        <option value="aggressive">Aggressive</option>
+        <option value="defensive">Defensive</option>
+        <option value="random">Random</option>
+      </select>
+    </div>
+  </div>
+
   <button id="deploy-btn" onclick="launch()">Deploy</button>
 </div>
 
@@ -496,6 +517,7 @@
     <button class="bar-btn speed-btn" data-speed="4" onclick="setSpeed(4)">4X</button>
     <button class="bar-btn active" id="pipeline-btn" onclick="toggleLeftPanel()">DATA</button>
     <button class="bar-btn" id="sidebar-btn" onclick="toggleSidebar()">INTEL</button>
+    <button class="bar-btn" style="color:#00ff88;border-color:rgba(0,255,136,0.3);" onclick="showSimulationComplete()">END MISSION</button>
     <button class="bar-btn" onclick="resetGrid()">RESET</button>
   </div>
 </div>
@@ -511,6 +533,7 @@
     <div id="pipeline-controls">
       <button class="pipe-btn" id="capture-toggle" onclick="toggleCapture()">AUTO</button>
       <button class="pipe-btn" onclick="captureOnce()">CAPTURE</button>
+      <button class="pipe-btn" onclick="showDatasetPreview()">PREVIEW</button>
       <button class="pipe-btn export" onclick="exportDataset()">EXPORT</button>
       <span id="pipe-turn-count">0 turns</span>
     </div>
@@ -595,6 +618,8 @@ let geminiInFlight = false; // prevent overlapping requests
 let prevGameSnapshot = null; // track changes between turns
 let iframeReports = new Map(); // cam index -> {screenshot, state} from iframe postMessage
 let geminiCallCount = 0; // throttle: only call every other turn
+let reasoningStore = {}; // turn -> {red: {saw,plan,risk,did}, blue: {saw,plan,risk,did}}
+let screenshotStore = {}; // turn -> base64 screenshot
 
 // Training pipeline state
 let pipelineCapturing = false;
@@ -655,6 +680,10 @@ function resetGrid() {
   redHealth = 100; blueHealth = 100;
   redKills = 0; blueKills = 0; engagements = 0; currentPhase = 0;
   geminiCallCount = 0; iframeReports.clear();
+  reasoningStore = {}; screenshotStore = {};
+  window._completionShown = false;
+  const compOverlay = document.getElementById('completion-overlay');
+  if (compOverlay) compOverlay.remove();
   document.getElementById('red-reasoning').innerHTML = '';
   document.getElementById('blue-reasoning').innerHTML = '';
 
@@ -783,6 +812,37 @@ function advanceTurn() {
   for (const g of games) { if (g.over) completed++; else running++; }
   document.getElementById('stats-info').textContent =
     games.length > 0 ? `${running} RUN / ${completed} END` : `${document.querySelectorAll('.cell').length}`;
+
+}
+
+function showSimulationComplete() {
+  const overlay = document.createElement('div');
+  overlay.id = 'completion-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:250;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(6,8,12,0);transition:background 1.5s;';
+
+  overlay.innerHTML = `
+    <div id="completion-content" style="opacity:0;transform:scale(0.95);transition:all 1s ease;text-align:center;">
+      <div style="font-size:10px;letter-spacing:4px;color:#00ff88;opacity:0.6;margin-bottom:8px;">ALL SIMULATIONS</div>
+      <div style="font-size:28px;font-weight:800;letter-spacing:6px;color:#fff;margin-bottom:8px;">COMPLETE</div>
+      <div style="width:60px;height:2px;background:#00ff88;margin:0 auto 16px;"></div>
+      <div style="font-size:11px;opacity:0.5;margin-bottom:6px;">${pipelineTurnData.length} TRAINING RECORDS CAPTURED</div>
+      <div style="font-size:11px;opacity:0.5;margin-bottom:24px;">${Object.keys(reasoningStore).length} REASONING CHAINS RECORDED</div>
+      <div style="display:flex;gap:12px;justify-content:center;">
+        <button onclick="showDatasetPreview();document.getElementById('completion-overlay').remove()" style="padding:10px 24px;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:2px;border:1px solid #00ff88;border-radius:3px;cursor:pointer;background:rgba(0,255,136,0.1);color:#00ff88;">VIEW DATASET</button>
+        <button onclick="exportDataset();document.getElementById('completion-overlay').remove()" style="padding:10px 24px;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:2px;border:1px solid rgba(255,255,255,0.2);border-radius:3px;cursor:pointer;background:transparent;color:#fff;">EXPORT</button>
+        <button onclick="document.getElementById('completion-overlay').remove()" style="padding:10px 24px;font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace;letter-spacing:2px;border:1px solid rgba(255,255,255,0.1);border-radius:3px;cursor:pointer;background:transparent;color:rgba(255,255,255,0.5);">DISMISS</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => {
+    overlay.style.background = 'rgba(6,8,12,0.85)';
+    setTimeout(() => {
+      const content = document.getElementById('completion-content');
+      if (content) { content.style.opacity = '1'; content.style.transform = 'scale(1)'; }
+    }, 500);
+  });
 }
 
 // Extract real game state for Gemini
@@ -1092,6 +1152,10 @@ Respond ONLY with the JSON object. No markdown, no code fences, no explanation.`
     console.log(`  BLU RISK: ${reasoning.blue?.risk}`);
     console.log(`  BLU  DID: ${reasoning.blue?.did}`);
 
+    // Store reasoning for pipeline data
+    reasoningStore[turn] = { red: reasoning.red || null, blue: reasoning.blue || null };
+    if (screenshot) screenshotStore[turn] = screenshot;
+
     if (reasoning.red) insertReasoningEntry('red', turn, reasoning.red);
     if (reasoning.blue) insertReasoningEntry('blue', turn, reasoning.blue);
 
@@ -1099,8 +1163,10 @@ Respond ONLY with the JSON object. No markdown, no code fences, no explanation.`
     const elapsed = (performance.now() - requestStartTime).toFixed(0);
     console.error(`%c[GEMINI] FAILED (${elapsed}ms): ${err.message}`, 'color: #ff4444; font-weight: bold');
     console.error('[GEMINI] No fallback — fix the API issue above to get real reasoning.');
-    insertReasoningEntry('red', turn, { saw: 'API ERROR', plan: err.message, risk: '--', did: '--' });
-    insertReasoningEntry('blue', turn, { saw: 'API ERROR', plan: err.message, risk: '--', did: '--' });
+    const errReasoning = { saw: 'API ERROR', plan: err.message, risk: '--', did: '--' };
+    reasoningStore[turn] = { red: errReasoning, blue: errReasoning };
+    insertReasoningEntry('red', turn, errReasoning);
+    insertReasoningEntry('blue', turn, errReasoning);
   } finally {
     geminiInFlight = false;
     console.log(`[GEMINI] Turn ${turn} complete, ready for next request`);
@@ -1423,7 +1489,31 @@ async function captureOnce() {
   const state = captureMultiGameState();
   console.log('[PIPELINE] Captured state for turn', pipelineTurnCount, '— scenarios:', state.scenarios.length, state.summary);
 
-  const entry = { turn: pipelineTurnCount, state, frame_pending: true };
+  // Attach closest available reasoning and screenshot from the store
+  // Reasoning may be stored at a different turn number due to throttling
+  let latestReasoning = null;
+  for (let t = turnNumber; t >= Math.max(1, turnNumber - 5); t--) {
+    if (reasoningStore[t]) { latestReasoning = reasoningStore[t]; break; }
+  }
+  let latestScreenshot = null;
+  for (let t = turnNumber; t >= Math.max(1, turnNumber - 5); t--) {
+    if (screenshotStore[t]) { latestScreenshot = screenshotStore[t]; break; }
+  }
+  const config = {
+    difficulty: document.getElementById('difficulty-select')?.value || 'medium',
+    agent_strategy: document.getElementById('agent-select')?.value || 'adaptive',
+    scenario: document.getElementById('scenario-select')?.value || 'mixed',
+    mode: currentMode,
+  };
+
+  const entry = {
+    turn: pipelineTurnCount,
+    state,
+    reasoning: latestReasoning,
+    screenshot: latestScreenshot,
+    config,
+    frame_pending: true,
+  };
   pipelineTurnData.push(entry);
 
   document.getElementById('pipeline-dot').className = 'status-dot active';
@@ -1431,19 +1521,15 @@ async function captureOnce() {
 
   // Add turn card immediately (frame will fill in async)
   const prompt = buildTacticalPrompt(state);
-  console.log('[PIPELINE] NanoBanana prompt (first 200 chars):', prompt.substring(0, 200));
-  console.log('[PIPELINE] Calling NanoBanana via OpenRouter');
+  entry.frame_prompt = prompt;
 
   const framePromise = generateTacticalFrame(state).then(result => {
-    console.log('[PIPELINE] NanoBanana response received — hasImage:', !!result.imageData, 'textLen:', result.textResponse?.length || 0);
-    if (result.imageData) console.log('[PIPELINE] Image data prefix:', result.imageData.substring(0, 60));
     entry.frame_pending = false;
     entry.frame_base64 = result.imageData;
     document.getElementById('pipeline-dot').className = 'status-dot idle';
     document.getElementById('pipeline-status').textContent = 'READY';
     return result;
   }).catch(err => {
-    console.error('[PIPELINE] NanoBanana ERROR:', err.message);
     entry.frame_pending = false;
     entry.frame_error = err.message;
     document.getElementById('pipeline-dot').className = 'status-dot idle';
@@ -1476,11 +1562,105 @@ function toggleCapture() {
   }
 }
 
+function classifyTacticalPattern(reasoning) {
+  if (!reasoning) return 'unknown';
+  const text = JSON.stringify(reasoning).toLowerCase();
+  if (text.includes('flank') || text.includes('surround')) return 'flanking';
+  if (text.includes('rush') || text.includes('charge') || text.includes('assault')) return 'rush';
+  if (text.includes('defend') || text.includes('hold') || text.includes('fortif')) return 'defensive_hold';
+  if (text.includes('retreat') || text.includes('withdraw') || text.includes('fall back')) return 'retreat';
+  if (text.includes('pincer') || text.includes('encircle')) return 'pincer';
+  if (text.includes('ambush') || text.includes('trap')) return 'ambush';
+  if (text.includes('snipe') || text.includes('range') || text.includes('distance')) return 'ranged_engagement';
+  if (text.includes('push') || text.includes('advance') || text.includes('press')) return 'advance';
+  return 'general_engagement';
+}
+
+function classifyEngagement(state) {
+  if (!state || !state.scenarios) return 'unknown';
+  const sc = state.scenarios[0];
+  if (!sc) return 'unknown';
+  const redAlive = sc.team_a?.alive || 0;
+  const blueAlive = sc.team_b?.alive || 0;
+  const total = redAlive + blueAlive;
+  if (total === 0) return 'total_annihilation';
+  if (sc.game_over) return 'conclusion';
+  if (sc.projectiles > 4) return 'heavy_combat';
+  if (sc.projectiles > 0) return 'skirmish';
+  return 'positioning';
+}
+
+function buildAnnotatedRecord(t) {
+  const redPattern = classifyTacticalPattern(t.reasoning?.red);
+  const bluePattern = classifyTacticalPattern(t.reasoning?.blue);
+  const engagementType = classifyEngagement(t.state);
+
+  const redAlive = t.state?.scenarios?.reduce((s, sc) => s + (sc.team_a?.alive || 0), 0) || 0;
+  const blueAlive = t.state?.scenarios?.reduce((s, sc) => s + (sc.team_b?.alive || 0), 0) || 0;
+  const dominant = redAlive > blueAlive ? 'red' : blueAlive > redAlive ? 'blue' : 'contested';
+
+  return {
+    id: `awa-${t.state?.timestamp || Date.now()}-turn-${String(t.turn).padStart(3, '0')}`,
+    turn: t.turn,
+    timestamp: t.state?.timestamp || new Date().toISOString(),
+    config: t.config || {},
+    world_state: {
+      phase: t.state?.phase || 'UNKNOWN',
+      scenarios: (t.state?.scenarios || []).map(sc => ({
+        name: sc.name, mode: sc.mode,
+        time_remaining: sc.time_remaining,
+        map: sc.map,
+        game_over: sc.game_over, winner: sc.winner,
+        red: { name: sc.team_a?.name, alive: sc.team_a?.alive, units: sc.team_a?.units },
+        blue: { name: sc.team_b?.name, alive: sc.team_b?.alive, units: sc.team_b?.units },
+        projectiles: sc.projectiles,
+      })),
+      summary: t.state?.summary || {},
+    },
+    agent_reasoning: {
+      red: t.reasoning?.red || null,
+      blue: t.reasoning?.blue || null,
+    },
+    annotations: {
+      tactical_pattern_red: redPattern,
+      tactical_pattern_blue: bluePattern,
+      engagement_type: engagementType,
+      dominant_team: dominant,
+      turn_phase: t.state?.phase || 'UNKNOWN',
+      difficulty: t.config?.difficulty || 'medium',
+      agent_strategy: t.config?.agent_strategy || 'adaptive',
+    },
+    multimodal: {
+      tactical_frame: t.frame_base64 || null,
+      canvas_screenshot: t.screenshot || null,
+      frame_generation_prompt: t.frame_prompt || null,
+    },
+  };
+}
+
 function exportDataset() {
   if (pipelineTurnData.length === 0) { alert('No turns captured yet.'); return; }
-  const jsonl = pipelineTurnData.map(t => JSON.stringify({
-    turn: t.turn, state: t.state, has_frame: !!t.frame_base64, frame_error: t.frame_error || null,
-  })).join('\n');
+
+  // Build annotated records
+  const records = pipelineTurnData.map(buildAnnotatedRecord);
+
+  // Dataset metadata header
+  const metadata = {
+    _dataset: 'adversarial-world-agents',
+    _version: '1.0',
+    _generated: new Date().toISOString(),
+    _total_turns: records.length,
+    _config: pipelineTurnData[0]?.config || {},
+    _description: 'Structured multimodal training data from adversarial AI agent simulations. Each record contains world state, agent reasoning chains, tactical pattern annotations, and aligned visual frames.',
+    _schema: {
+      world_state: 'Full game state with unit positions, velocities, HP per scenario',
+      agent_reasoning: 'SAW/PLAN/RISK/DID chains for both red and blue agents (Gemini-powered)',
+      annotations: 'Auto-classified tactical patterns, engagement types, dominant team',
+      multimodal: 'NanoBanana tactical diagram frames + canvas screenshots (base64)',
+    },
+  };
+
+  const jsonl = JSON.stringify(metadata) + '\n' + records.map(r => JSON.stringify(r)).join('\n');
   const blob = new Blob([jsonl], { type: 'application/jsonl' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1488,6 +1668,42 @@ function exportDataset() {
   a.download = `awa_training_data_${Date.now()}.jsonl`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function showDatasetPreview() {
+  if (pipelineTurnData.length === 0) { alert('No turns captured yet. Run the simulation first.'); return; }
+
+  // Build a sample record from the latest turn
+  const latest = pipelineTurnData[pipelineTurnData.length - 1];
+  const sample = buildAnnotatedRecord(latest);
+
+  // Strip base64 for preview readability
+  const preview = JSON.parse(JSON.stringify(sample));
+  if (preview.multimodal.tactical_frame) preview.multimodal.tactical_frame = '[BASE64_IMAGE_DATA]';
+  if (preview.multimodal.canvas_screenshot) preview.multimodal.canvas_screenshot = '[BASE64_SCREENSHOT_DATA]';
+
+  // Create modal overlay
+  const modal = document.createElement('div');
+  modal.id = 'dataset-preview-modal';
+  modal.style.cssText = 'position:fixed;inset:0;z-index:300;background:rgba(6,8,12,0.95);backdrop-filter:blur(12px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px;';
+
+  const header = document.createElement('div');
+  header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;width:100%;max-width:900px;margin-bottom:16px;';
+  header.innerHTML = `
+    <div>
+      <div style="font-size:14px;font-weight:800;letter-spacing:3px;color:#00ff88;">DATASET PREVIEW</div>
+      <div style="font-size:10px;opacity:0.4;margin-top:4px;">${pipelineTurnData.length} records captured | Turn ${sample.turn} shown below</div>
+    </div>
+    <button onclick="document.getElementById('dataset-preview-modal').remove()" style="background:none;border:1px solid rgba(255,255,255,0.15);color:#fff;padding:6px 16px;border-radius:3px;cursor:pointer;font-family:'JetBrains Mono',monospace;font-size:11px;">CLOSE</button>
+  `;
+
+  const content = document.createElement('pre');
+  content.style.cssText = 'background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:20px;overflow:auto;max-height:70vh;width:100%;max-width:900px;font-size:11px;line-height:1.5;color:#c8d8e8;';
+  content.innerHTML = syntaxHighlightJSON(JSON.stringify(preview, null, 2));
+
+  modal.appendChild(header);
+  modal.appendChild(content);
+  document.body.appendChild(modal);
 }
 
 // FPS counter
