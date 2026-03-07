@@ -1,0 +1,780 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Adversarial Arena - Physics Simulation</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.20.0/matter.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  #hud {
+    width: 100%;
+    max-width: 1000px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 24px;
+    z-index: 10;
+  }
+  .team-score {
+    font-size: 18px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .team-score .dot {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .red-team .dot { background: #ff4444; box-shadow: 0 0 8px #ff4444; }
+  .blue-team .dot { background: #4488ff; box-shadow: 0 0 8px #4488ff; }
+  .red-team { color: #ff6666; }
+  .blue-team { color: #6699ff; }
+  #timer {
+    font-size: 32px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: #ffffff;
+    text-shadow: 0 0 20px rgba(255,255,255,0.3);
+    min-width: 80px;
+    text-align: center;
+  }
+  #timer.urgent { color: #ff4444; text-shadow: 0 0 20px rgba(255,68,68,0.5); }
+  #canvas-wrap {
+    position: relative;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 0 60px rgba(0,0,0,0.6), inset 0 0 60px rgba(0,0,0,0.3);
+  }
+  canvas { display: block; }
+  #overlay {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background: rgba(5,5,10,0.85);
+    backdrop-filter: blur(8px);
+    z-index: 20;
+    border-radius: 8px;
+  }
+  #overlay.visible { display: flex; }
+  #overlay h1 {
+    font-size: 48px;
+    font-weight: 800;
+    margin-bottom: 8px;
+    text-shadow: 0 0 30px currentColor;
+  }
+  #overlay p {
+    font-size: 20px;
+    opacity: 0.7;
+    margin-bottom: 24px;
+  }
+  #overlay button {
+    padding: 12px 36px;
+    font-size: 16px;
+    font-weight: 600;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    background: #ffffff;
+    color: #0a0a0f;
+    transition: transform 0.15s, box-shadow 0.15s;
+  }
+  #overlay button:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0 20px rgba(255,255,255,0.3);
+  }
+  #status-bar {
+    width: 100%;
+    max-width: 1000px;
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    padding: 10px 24px;
+    font-size: 13px;
+    opacity: 0.5;
+  }
+  .hp-bar-container {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .hp-bar {
+    width: 120px;
+    height: 6px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .hp-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s;
+  }
+  .hp-bar-fill.red { background: linear-gradient(90deg, #ff4444, #ff8844); }
+  .hp-bar-fill.blue { background: linear-gradient(90deg, #4488ff, #44ccff); }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div class="team-score red-team">
+    <span class="dot"></span>
+    <span>ATTACKERS: <span id="red-count">5</span></span>
+    <div class="hp-bar-container">
+      <div class="hp-bar"><div class="hp-bar-fill red" id="red-hp" style="width:100%"></div></div>
+    </div>
+  </div>
+  <div id="timer">1:00</div>
+  <div class="team-score blue-team">
+    <div class="hp-bar-container">
+      <div class="hp-bar"><div class="hp-bar-fill blue" id="blue-hp" style="width:100%"></div></div>
+    </div>
+    <span>DEFENDERS: <span id="blue-count">5</span></span>
+    <span class="dot"></span>
+  </div>
+</div>
+
+<div id="canvas-wrap">
+  <canvas id="arena"></canvas>
+  <div id="overlay">
+    <h1 id="winner-text">SIMULATION COMPLETE</h1>
+    <p id="winner-sub">---</p>
+    <button id="restart-btn">RUN AGAIN</button>
+  </div>
+</div>
+
+<div id="status-bar">
+  <span>MATTER.JS 2D PHYSICS</span>
+  <span>|</span>
+  <span>ADVERSARIAL SIMULATION</span>
+  <span>|</span>
+  <span id="fps-display">60 FPS</span>
+</div>
+
+<script>
+// ===================== ENGINE SETUP =====================
+const { Engine, Render, Runner, Bodies, Body, Composite, Events, Vector, Query } = Matter;
+
+const W = 960, H = 580;
+const canvas = document.getElementById('arena');
+canvas.width = W;
+canvas.height = H;
+
+const engine = Engine.create({ gravity: { x: 0, y: 0 } });
+const world = engine.world;
+
+// We do custom rendering on a 2D canvas
+const ctx = canvas.getContext('2d');
+
+// ===================== GLOBALS =====================
+let gameTime = 60;
+let gameOver = false;
+let redUnits = [];
+let blueUnits = [];
+let particles = [];
+let frameCount = 0;
+let lastFpsTime = performance.now();
+let fpsValue = 60;
+
+const BASE_X = W - 100;
+const BASE_Y = H / 2;
+const BASE_RADIUS = 40;
+
+const UNIT_RADIUS = 16;
+const UNIT_MAX_HP = 100;
+const COLLISION_DAMAGE = 12;
+const UNIT_SPEED = 2.2;
+const RED_SPEED = 2.0;
+const BLUE_SPEED = 2.6;
+
+// ===================== WALLS =====================
+const wallOpts = { isStatic: true, restitution: 0.5, friction: 0, label: 'wall' };
+const wallThickness = 30;
+const walls = [
+  Bodies.rectangle(W/2, -wallThickness/2, W + wallThickness*2, wallThickness, wallOpts),
+  Bodies.rectangle(W/2, H + wallThickness/2, W + wallThickness*2, wallThickness, wallOpts),
+  Bodies.rectangle(-wallThickness/2, H/2, wallThickness, H + wallThickness*2, wallOpts),
+  Bodies.rectangle(W + wallThickness/2, H/2, wallThickness, H + wallThickness*2, wallOpts),
+];
+Composite.add(world, walls);
+
+// ===================== OBSTACLES =====================
+const obstOpts = { isStatic: true, restitution: 0.6, friction: 0, label: 'obstacle' };
+const obstacles = [
+  Bodies.rectangle(W * 0.33, H * 0.25, 80, 20, obstOpts),
+  Bodies.rectangle(W * 0.33, H * 0.75, 80, 20, obstOpts),
+  Bodies.rectangle(W * 0.5, H * 0.5, 20, 120, obstOpts),
+  Bodies.rectangle(W * 0.5, H * 0.3, 60, 16, obstOpts),
+  Bodies.rectangle(W * 0.5, H * 0.7, 60, 16, obstOpts),
+  Bodies.rectangle(W * 0.65, H * 0.2, 16, 80, obstOpts),
+  Bodies.rectangle(W * 0.65, H * 0.8, 16, 80, obstOpts),
+  Bodies.circle(W * 0.4, H * 0.5, 18, obstOpts),
+  Bodies.circle(W * 0.75, H * 0.35, 14, obstOpts),
+  Bodies.circle(W * 0.75, H * 0.65, 14, obstOpts),
+];
+Composite.add(world, obstacles);
+
+// ===================== BASE (sensor) =====================
+const baseSensor = Bodies.circle(BASE_X, BASE_Y, BASE_RADIUS, {
+  isStatic: true, isSensor: true, label: 'base',
+  render: { fillStyle: 'transparent' }
+});
+Composite.add(world, baseSensor);
+
+// ===================== UNIT FACTORY =====================
+function createUnit(x, y, team) {
+  const body = Bodies.circle(x, y, UNIT_RADIUS, {
+    restitution: 0.4,
+    friction: 0,
+    frictionAir: 0.05,
+    label: team,
+    density: 0.002,
+  });
+  body.hp = UNIT_MAX_HP;
+  body.team = team;
+  body.alive = true;
+  body.damageCooldown = 0;
+  body.spawnTime = performance.now();
+  Composite.add(world, body);
+  return body;
+}
+
+function spawnTeams() {
+  redUnits = [];
+  blueUnits = [];
+  for (let i = 0; i < 5; i++) {
+    const ry = H * 0.2 + (H * 0.6) * (i / 4);
+    redUnits.push(createUnit(60 + Math.random() * 30, ry, 'red'));
+  }
+  for (let i = 0; i < 5; i++) {
+    const by = H * 0.2 + (H * 0.6) * (i / 4);
+    blueUnits.push(createUnit(W - 160 + Math.random() * 30, by, 'blue'));
+  }
+}
+
+// ===================== AI =====================
+function aiTick() {
+  const aliveRed = redUnits.filter(u => u.alive);
+  const aliveBlue = blueUnits.filter(u => u.alive);
+
+  // Red: move toward base, with slight avoidance of nearest obstacle
+  for (const unit of aliveRed) {
+    if (!unit.alive) continue;
+    let target = { x: BASE_X, y: BASE_Y };
+
+    // If a blue unit is very close, steer slightly away to try flanking
+    let nearestBlue = null;
+    let nearestBlueDist = Infinity;
+    for (const b of aliveBlue) {
+      const d = Vector.magnitude(Vector.sub(b.position, unit.position));
+      if (d < nearestBlueDist) { nearestBlueDist = d; nearestBlue = b; }
+    }
+
+    let dir = Vector.normalise(Vector.sub(target, unit.position));
+
+    // Add slight perpendicular jitter to avoid head-on stacking
+    const jitter = Math.sin(performance.now() * 0.003 + unit.id * 1.7) * 0.4;
+    dir = Vector.normalise({ x: dir.x + dir.y * jitter, y: dir.y - dir.x * jitter });
+
+    Body.setVelocity(unit, { x: dir.x * RED_SPEED, y: dir.y * RED_SPEED });
+  }
+
+  // Blue: move toward nearest red unit
+  for (const unit of aliveBlue) {
+    if (!unit.alive) continue;
+    let nearest = null;
+    let nearestDist = Infinity;
+    for (const r of aliveRed) {
+      const d = Vector.magnitude(Vector.sub(r.position, unit.position));
+      if (d < nearestDist) { nearestDist = d; nearest = r; }
+    }
+    if (nearest) {
+      // Predict interception point
+      const toTarget = Vector.sub(nearest.position, unit.position);
+      const predictAhead = Vector.mult(Vector.normalise({ x: nearest.velocity.x, y: nearest.velocity.y }), nearestDist * 0.3);
+      const interceptPoint = Vector.add(nearest.position, predictAhead);
+      let dir = Vector.normalise(Vector.sub(interceptPoint, unit.position));
+      Body.setVelocity(unit, { x: dir.x * BLUE_SPEED, y: dir.y * BLUE_SPEED });
+    } else {
+      // Patrol near base
+      const toBase = Vector.sub({ x: BASE_X, y: BASE_Y }, unit.position);
+      if (Vector.magnitude(toBase) > 80) {
+        const dir = Vector.normalise(toBase);
+        Body.setVelocity(unit, { x: dir.x * 1.0, y: dir.y * 1.0 });
+      } else {
+        Body.setVelocity(unit, { x: 0, y: 0 });
+      }
+    }
+  }
+}
+
+// ===================== COLLISION HANDLING =====================
+Events.on(engine, 'collisionStart', (event) => {
+  for (const pair of event.pairs) {
+    const a = pair.bodyA;
+    const b = pair.bodyB;
+
+    // Unit vs unit (different teams)
+    if (a.team && b.team && a.team !== b.team && a.alive && b.alive) {
+      if (a.damageCooldown <= 0 && b.damageCooldown <= 0) {
+        a.hp -= COLLISION_DAMAGE;
+        b.hp -= COLLISION_DAMAGE;
+        a.damageCooldown = 8;
+        b.damageCooldown = 8;
+        spawnCollisionParticles(a.position, b.position);
+      }
+    }
+
+    // Red unit reaches base
+    if ((a.label === 'base' && b.team === 'red') || (b.label === 'base' && a.team === 'red')) {
+      const redUnit = a.team === 'red' ? a : b;
+      if (redUnit.alive && !redUnit.reachedBase) {
+        redUnit.reachedBase = true;
+      }
+    }
+  }
+});
+
+Events.on(engine, 'collisionActive', (event) => {
+  for (const pair of event.pairs) {
+    const a = pair.bodyA;
+    const b = pair.bodyB;
+    if (a.team && b.team && a.team !== b.team && a.alive && b.alive) {
+      if (a.damageCooldown <= 0 && b.damageCooldown <= 0) {
+        a.hp -= COLLISION_DAMAGE * 0.6;
+        b.hp -= COLLISION_DAMAGE * 0.6;
+        a.damageCooldown = 10;
+        b.damageCooldown = 10;
+        spawnCollisionParticles(a.position, b.position);
+      }
+    }
+  }
+});
+
+// ===================== PARTICLES =====================
+function spawnCollisionParticles(posA, posB) {
+  const mid = { x: (posA.x + posB.x) / 2, y: (posA.y + posB.y) / 2 };
+  for (let i = 0; i < 12; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 1.5 + Math.random() * 3;
+    particles.push({
+      x: mid.x,
+      y: mid.y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1.0,
+      decay: 0.02 + Math.random() * 0.03,
+      radius: 2 + Math.random() * 3,
+      color: Math.random() > 0.5 ? '#ff6644' : '#ffcc44',
+    });
+  }
+}
+
+function spawnDeathParticles(pos, team) {
+  const color = team === 'red' ? '#ff4444' : '#4488ff';
+  for (let i = 0; i < 24; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 2 + Math.random() * 4;
+    particles.push({
+      x: pos.x,
+      y: pos.y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 1.0,
+      decay: 0.015 + Math.random() * 0.02,
+      radius: 3 + Math.random() * 5,
+      color: color,
+    });
+  }
+}
+
+function updateParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vx *= 0.96;
+    p.vy *= 0.96;
+    p.life -= p.decay;
+    if (p.life <= 0) {
+      particles.splice(i, 1);
+    }
+  }
+}
+
+// ===================== RENDERING =====================
+function drawGrid() {
+  ctx.strokeStyle = 'rgba(255,255,255,0.025)';
+  ctx.lineWidth = 1;
+  const step = 40;
+  for (let x = 0; x < W; x += step) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  for (let y = 0; y < H; y += step) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+}
+
+function drawBase() {
+  const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.003);
+  // Outer glow
+  const grad = ctx.createRadialGradient(BASE_X, BASE_Y, BASE_RADIUS * 0.3, BASE_X, BASE_Y, BASE_RADIUS * 1.8);
+  grad.addColorStop(0, `rgba(68, 136, 255, ${0.15 + pulse * 0.1})`);
+  grad.addColorStop(0.5, `rgba(68, 136, 255, ${0.05 + pulse * 0.05})`);
+  grad.addColorStop(1, 'rgba(68, 136, 255, 0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(BASE_X, BASE_Y, BASE_RADIUS * 1.8, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Hex border
+  ctx.strokeStyle = `rgba(68, 170, 255, ${0.5 + pulse * 0.3})`;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = (Math.PI / 3) * i - Math.PI / 6 + performance.now() * 0.0005;
+    const x = BASE_X + Math.cos(a) * BASE_RADIUS;
+    const y = BASE_Y + Math.sin(a) * BASE_RADIUS;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.stroke();
+
+  // Inner hex
+  ctx.strokeStyle = `rgba(68, 170, 255, ${0.2 + pulse * 0.15})`;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = (Math.PI / 3) * i - Math.PI / 6 - performance.now() * 0.0008;
+    const x = BASE_X + Math.cos(a) * (BASE_RADIUS * 0.6);
+    const y = BASE_Y + Math.sin(a) * (BASE_RADIUS * 0.6);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.stroke();
+
+  // Label
+  ctx.fillStyle = `rgba(150, 200, 255, ${0.6 + pulse * 0.2})`;
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('BASE', BASE_X, BASE_Y + 3);
+}
+
+function drawObstacles() {
+  for (const obs of obstacles) {
+    const verts = obs.vertices;
+    ctx.fillStyle = 'rgba(40, 45, 60, 0.9)';
+    ctx.strokeStyle = 'rgba(80, 90, 120, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(verts[0].x, verts[0].y);
+    for (let i = 1; i < verts.length; i++) {
+      ctx.lineTo(verts[i].x, verts[i].y);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+}
+
+function drawUnit(unit) {
+  if (!unit.alive) return;
+
+  const { x, y } = unit.position;
+  const hpRatio = Math.max(0, unit.hp / UNIT_MAX_HP);
+  const radius = UNIT_RADIUS * (0.5 + 0.5 * hpRatio);
+  const isRed = unit.team === 'red';
+  const baseColor = isRed ? [255, 68, 68] : [68, 136, 255];
+  const glowColor = isRed ? 'rgba(255,68,68,' : 'rgba(68,136,255,';
+
+  // Damage flash
+  const flashIntensity = unit.damageCooldown > 0 ? 0.6 : 0;
+
+  // Outer glow
+  const glowGrad = ctx.createRadialGradient(x, y, radius * 0.2, x, y, radius * 2.5);
+  glowGrad.addColorStop(0, glowColor + (0.3 + flashIntensity * 0.3) + ')');
+  glowGrad.addColorStop(0.4, glowColor + '0.1)');
+  glowGrad.addColorStop(1, glowColor + '0)');
+  ctx.fillStyle = glowGrad;
+  ctx.beginPath();
+  ctx.arc(x, y, radius * 2.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Body
+  const bodyGrad = ctx.createRadialGradient(x - radius * 0.2, y - radius * 0.2, 0, x, y, radius);
+  const r = baseColor[0], g = baseColor[1], b = baseColor[2];
+  bodyGrad.addColorStop(0, `rgba(${Math.min(255, r + 80)}, ${Math.min(255, g + 80)}, ${Math.min(255, b + 80)}, ${0.9 * hpRatio + 0.1})`);
+  bodyGrad.addColorStop(1, `rgba(${r}, ${g}, ${b}, ${0.7 * hpRatio + 0.1})`);
+  ctx.fillStyle = bodyGrad;
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Bright core
+  ctx.fillStyle = `rgba(255,255,255,${0.3 * hpRatio + flashIntensity * 0.4})`;
+  ctx.beginPath();
+  ctx.arc(x - radius * 0.15, y - radius * 0.15, radius * 0.35, 0, Math.PI * 2);
+  ctx.fill();
+
+  // HP ring
+  if (hpRatio < 1.0) {
+    ctx.strokeStyle = glowColor + '0.7)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(x, y, radius + 3, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * hpRatio);
+    ctx.stroke();
+  }
+
+  // Direction indicator (small arrow)
+  const vel = unit.velocity;
+  const speed = Math.sqrt(vel.x * vel.x + vel.y * vel.y);
+  if (speed > 0.3) {
+    const angle = Math.atan2(vel.y, vel.x);
+    const tipX = x + Math.cos(angle) * (radius + 6);
+    const tipY = y + Math.sin(angle) * (radius + 6);
+    ctx.fillStyle = glowColor + '0.6)';
+    ctx.beginPath();
+    ctx.arc(tipX, tipY, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.radius * p.life, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawScanlines() {
+  ctx.fillStyle = 'rgba(0,0,0,0.03)';
+  for (let y = 0; y < H; y += 3) {
+    ctx.fillRect(0, y, W, 1);
+  }
+}
+
+function drawVignette() {
+  const grad = ctx.createRadialGradient(W/2, H/2, H * 0.35, W/2, H/2, H * 0.85);
+  grad.addColorStop(0, 'rgba(0,0,0,0)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.4)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function render() {
+  // Background
+  ctx.fillStyle = '#0c0c14';
+  ctx.fillRect(0, 0, W, H);
+
+  drawGrid();
+  drawBase();
+  drawObstacles();
+
+  // Draw connection lines between units (team links)
+  drawTeamLinks(redUnits.filter(u => u.alive), 'rgba(255,68,68,0.06)');
+  drawTeamLinks(blueUnits.filter(u => u.alive), 'rgba(68,136,255,0.06)');
+
+  // Draw units
+  for (const u of redUnits) drawUnit(u);
+  for (const u of blueUnits) drawUnit(u);
+
+  drawParticles();
+  drawScanlines();
+  drawVignette();
+}
+
+function drawTeamLinks(units, color) {
+  if (units.length < 2) return;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  for (let i = 0; i < units.length; i++) {
+    for (let j = i + 1; j < units.length; j++) {
+      const dist = Vector.magnitude(Vector.sub(units[i].position, units[j].position));
+      if (dist < 200) {
+        ctx.globalAlpha = 1 - dist / 200;
+        ctx.beginPath();
+        ctx.moveTo(units[i].position.x, units[i].position.y);
+        ctx.lineTo(units[j].position.x, units[j].position.y);
+        ctx.stroke();
+      }
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ===================== GAME LOGIC =====================
+function killUnit(unit) {
+  if (!unit.alive) return;
+  unit.alive = false;
+  spawnDeathParticles(unit.position, unit.team);
+  Composite.remove(world, unit);
+}
+
+function updateUnits() {
+  for (const u of [...redUnits, ...blueUnits]) {
+    if (!u.alive) continue;
+    if (u.damageCooldown > 0) u.damageCooldown--;
+    if (u.hp <= 0) killUnit(u);
+  }
+}
+
+function checkWin() {
+  const aliveRed = redUnits.filter(u => u.alive);
+  const aliveBlue = blueUnits.filter(u => u.alive);
+  const redAtBase = aliveRed.filter(u => u.reachedBase);
+
+  if (aliveRed.length === 0) {
+    endGame('blue', 'All attackers eliminated');
+    return;
+  }
+  if (aliveBlue.length === 0) {
+    endGame('red', 'All defenders eliminated');
+    return;
+  }
+  if (redAtBase.length >= 3) {
+    endGame('red', 'Base overrun (' + redAtBase.length + ' attackers reached base)');
+    return;
+  }
+  if (gameTime <= 0) {
+    if (redAtBase.length > 0) {
+      endGame('red', redAtBase.length + ' attacker(s) reached the base');
+    } else {
+      endGame('blue', 'Base successfully defended');
+    }
+  }
+}
+
+function endGame(winner, reason) {
+  gameOver = true;
+  const overlay = document.getElementById('overlay');
+  const text = document.getElementById('winner-text');
+  const sub = document.getElementById('winner-sub');
+
+  if (winner === 'red') {
+    text.textContent = 'ATTACKERS WIN';
+    text.style.color = '#ff4444';
+  } else {
+    text.textContent = 'DEFENDERS WIN';
+    text.style.color = '#4488ff';
+  }
+  sub.textContent = reason;
+  overlay.classList.add('visible');
+}
+
+// ===================== HUD =====================
+function updateHUD() {
+  const aliveRed = redUnits.filter(u => u.alive);
+  const aliveBlue = blueUnits.filter(u => u.alive);
+
+  document.getElementById('red-count').textContent = aliveRed.length;
+  document.getElementById('blue-count').textContent = aliveBlue.length;
+
+  const totalRedHP = aliveRed.reduce((s, u) => s + Math.max(0, u.hp), 0);
+  const totalBlueHP = aliveBlue.reduce((s, u) => s + Math.max(0, u.hp), 0);
+  const maxRedHP = 5 * UNIT_MAX_HP;
+  const maxBlueHP = 5 * UNIT_MAX_HP;
+
+  document.getElementById('red-hp').style.width = (totalRedHP / maxRedHP * 100) + '%';
+  document.getElementById('blue-hp').style.width = (totalBlueHP / maxBlueHP * 100) + '%';
+
+  const mins = Math.floor(gameTime / 60);
+  const secs = Math.floor(gameTime % 60);
+  const timerEl = document.getElementById('timer');
+  timerEl.textContent = mins + ':' + String(secs).padStart(2, '0');
+  timerEl.classList.toggle('urgent', gameTime <= 10);
+}
+
+// ===================== MAIN LOOP =====================
+let lastTime = performance.now();
+let timerAccum = 0;
+
+function gameLoop() {
+  const now = performance.now();
+  const dt = Math.min(now - lastTime, 33.33); // cap at ~30fps minimum
+  lastTime = now;
+
+  if (!gameOver) {
+    // Timer
+    timerAccum += dt;
+    if (timerAccum >= 1000) {
+      gameTime -= 1;
+      timerAccum -= 1000;
+    }
+
+    // Physics step
+    Engine.update(engine, dt);
+
+    // AI
+    aiTick();
+
+    // Game logic
+    updateUnits();
+    updateParticles();
+    checkWin();
+    updateHUD();
+  } else {
+    updateParticles();
+  }
+
+  // FPS counter
+  frameCount++;
+  if (now - lastFpsTime >= 500) {
+    fpsValue = Math.round(frameCount / ((now - lastFpsTime) / 1000));
+    frameCount = 0;
+    lastFpsTime = now;
+    document.getElementById('fps-display').textContent = fpsValue + ' FPS';
+  }
+
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+// ===================== INIT / RESTART =====================
+function init() {
+  // Clear everything
+  const allBodies = Composite.allBodies(world);
+  for (const b of allBodies) {
+    if (b.label === 'red' || b.label === 'blue') {
+      Composite.remove(world, b);
+    }
+  }
+  redUnits = [];
+  blueUnits = [];
+  particles = [];
+  gameTime = 60;
+  gameOver = false;
+  timerAccum = 0;
+  lastTime = performance.now();
+  document.getElementById('overlay').classList.remove('visible');
+
+  spawnTeams();
+}
+
+document.getElementById('restart-btn').addEventListener('click', init);
+
+// Start
+init();
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>

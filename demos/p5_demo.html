@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Abyssal Warfare -- Bioluminescent Swarm Simulation</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { overflow: hidden; background: #000; width: 100%; height: 100%; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+<script>
+// ============================================================
+//  ABYSSAL WARFARE - Bioluminescent Adversarial Swarm Simulation
+// ============================================================
+
+// --------------- GLOBAL CONFIG ---------------
+const CFG = {
+  RED_COUNT: 18,
+  BLUE_COUNT: 18,
+  MAX_SPEED: 2.8,
+  MAX_FORCE: 0.12,
+  TRAIL_LENGTH: 28,
+  FIGHT_RANGE: 38,
+  DAMAGE_PER_FRAME: 0.35,
+  SEPARATION_RADIUS: 45,
+  COHESION_RADIUS: 160,
+  ALIGNMENT_RADIUS: 120,
+  PERCEPTION_RADIUS: 260,
+  HIVE_RADIUS: 80,
+  MATCH_DURATION: 90, // seconds
+  DEATH_PARTICLES: 14,
+};
+
+// --------------- STATE ---------------
+let redSwarm = [];
+let blueSwarm = [];
+let deathParticles = [];
+let combatFlashes = [];
+let hivePos;
+let hiveParticles = [];
+let timer;
+let gameOver = false;
+let winner = "";
+let redScore = 0;
+let blueScore = 0;
+let frameCounter = 0;
+let ambientParticles = [];
+let jellyTendrils = [];
+
+// --------------- SETUP ---------------
+function setup() {
+  createCanvas(windowWidth, windowHeight);
+  colorMode(RGB, 255, 255, 255, 255);
+  textFont("monospace");
+
+  hivePos = createVector(width * 0.78, height * 0.5);
+  timer = CFG.MATCH_DURATION;
+
+  // Create hive ambient particles
+  for (let i = 0; i < 30; i++) {
+    hiveParticles.push({
+      angle: random(TWO_PI),
+      radius: random(20, CFG.HIVE_RADIUS * 1.3),
+      speed: random(0.003, 0.015),
+      size: random(2, 6),
+      alpha: random(60, 180),
+      pulsePhase: random(TWO_PI),
+    });
+  }
+
+  // Create ambient deep-sea particles
+  for (let i = 0; i < 80; i++) {
+    ambientParticles.push({
+      x: random(width),
+      y: random(height),
+      vx: random(-0.15, 0.15),
+      vy: random(-0.3, 0.1),
+      size: random(1, 3.5),
+      alpha: random(15, 60),
+      pulsePhase: random(TWO_PI),
+      color: random() < 0.5
+        ? [80, 200, 220]
+        : random() < 0.5
+          ? [120, 80, 200]
+          : [40, 180, 120],
+    });
+  }
+
+  // Spawn swarms
+  for (let i = 0; i < CFG.RED_COUNT; i++) {
+    redSwarm.push(new Agent(
+      random(60, width * 0.25),
+      random(height * 0.2, height * 0.8),
+      "red"
+    ));
+  }
+  for (let i = 0; i < CFG.BLUE_COUNT; i++) {
+    blueSwarm.push(new Agent(
+      random(width * 0.6, width * 0.85),
+      random(height * 0.2, height * 0.8),
+      "blue"
+    ));
+  }
+}
+
+// --------------- AGENT CLASS ---------------
+class Agent {
+  constructor(x, y, team) {
+    this.pos = createVector(x, y);
+    this.vel = p5.Vector.random2D().mult(random(0.5, 1.5));
+    this.acc = createVector(0, 0);
+    this.team = team;
+    this.hp = 100;
+    this.maxHp = 100;
+    this.trail = [];
+    this.size = random(6, 10);
+    this.alive = true;
+    this.fighting = false;
+    this.pulsePhase = random(TWO_PI);
+    this.tentaclePhase = random(TWO_PI);
+    this.tentacleCount = floor(random(3, 6));
+    this.aggroCooldown = 0;
+    this.wanderAngle = random(TWO_PI);
+  }
+
+  getColor(alpha = 255) {
+    if (this.team === "red") {
+      let pulse = sin(this.pulsePhase + frameCount * 0.06) * 0.3 + 0.7;
+      return color(
+        255 * pulse,
+        40 + 60 * (1 - pulse),
+        60 * (1 - pulse),
+        alpha
+      );
+    } else {
+      let pulse = sin(this.pulsePhase + frameCount * 0.05) * 0.3 + 0.7;
+      return color(
+        40 * (1 - pulse),
+        120 + 80 * pulse,
+        255 * pulse,
+        alpha
+      );
+    }
+  }
+
+  getGlowColor(alpha = 80) {
+    if (this.team === "red") {
+      return color(255, 80, 30, alpha);
+    } else {
+      return color(30, 140, 255, alpha);
+    }
+  }
+
+  applyForce(force) {
+    this.acc.add(force);
+  }
+
+  seek(target) {
+    let desired = p5.Vector.sub(target, this.pos);
+    let d = desired.mag();
+    desired.normalize();
+    if (d < 100) {
+      desired.mult(map(d, 0, 100, 0, CFG.MAX_SPEED));
+    } else {
+      desired.mult(CFG.MAX_SPEED);
+    }
+    let steer = p5.Vector.sub(desired, this.vel);
+    steer.limit(CFG.MAX_FORCE);
+    return steer;
+  }
+
+  flee(target, radius = 80) {
+    let desired = p5.Vector.sub(this.pos, target);
+    let d = desired.mag();
+    if (d < radius) {
+      desired.normalize().mult(CFG.MAX_SPEED);
+      let steer = p5.Vector.sub(desired, this.vel);
+      steer.limit(CFG.MAX_FORCE * 1.5);
+      return steer;
+    }
+    return createVector(0, 0);
+  }
+
+  separate(others) {
+    let steer = createVector(0, 0);
+    let count = 0;
+    for (let other of others) {
+      if (other === this || !other.alive) continue;
+      let d = p5.Vector.dist(this.pos, other.pos);
+      if (d < CFG.SEPARATION_RADIUS && d > 0) {
+        let diff = p5.Vector.sub(this.pos, other.pos);
+        diff.normalize().div(d);
+        steer.add(diff);
+        count++;
+      }
+    }
+    if (count > 0) {
+      steer.div(count);
+      steer.normalize().mult(CFG.MAX_SPEED);
+      steer.sub(this.vel);
+      steer.limit(CFG.MAX_FORCE);
+    }
+    return steer;
+  }
+
+  cohere(others) {
+    let sum = createVector(0, 0);
+    let count = 0;
+    for (let other of others) {
+      if (other === this || !other.alive) continue;
+      let d = p5.Vector.dist(this.pos, other.pos);
+      if (d < CFG.COHESION_RADIUS) {
+        sum.add(other.pos);
+        count++;
+      }
+    }
+    if (count > 0) {
+      sum.div(count);
+      return this.seek(sum);
+    }
+    return createVector(0, 0);
+  }
+
+  align(others) {
+    let sum = createVector(0, 0);
+    let count = 0;
+    for (let other of others) {
+      if (other === this || !other.alive) continue;
+      let d = p5.Vector.dist(this.pos, other.pos);
+      if (d < CFG.ALIGNMENT_RADIUS) {
+        sum.add(other.vel);
+        count++;
+      }
+    }
+    if (count > 0) {
+      sum.div(count);
+      sum.normalize().mult(CFG.MAX_SPEED);
+      let steer = p5.Vector.sub(sum, this.vel);
+      steer.limit(CFG.MAX_FORCE);
+      return steer;
+    }
+    return createVector(0, 0);
+  }
+
+  wander() {
+    this.wanderAngle += random(-0.4, 0.4);
+    let wanderForce = p5.Vector.fromAngle(this.wanderAngle);
+    wanderForce.mult(0.3);
+    return wanderForce;
+  }
+
+  stayInBounds() {
+    let margin = 60;
+    let steer = createVector(0, 0);
+    if (this.pos.x < margin) steer.x = CFG.MAX_FORCE * 2;
+    if (this.pos.x > width - margin) steer.x = -CFG.MAX_FORCE * 2;
+    if (this.pos.y < margin) steer.y = CFG.MAX_FORCE * 2;
+    if (this.pos.y > height - margin) steer.y = -CFG.MAX_FORCE * 2;
+    return steer;
+  }
+
+  update(allies, enemies) {
+    if (!this.alive) return;
+
+    this.fighting = false;
+    this.aggroCooldown = max(0, this.aggroCooldown - 1);
+
+    // --- Steering behaviors ---
+    let sep = this.separate(allies).mult(1.8);
+    let coh = this.cohere(allies).mult(0.6);
+    let ali = this.align(allies).mult(0.5);
+    let bounds = this.stayInBounds();
+    let wander = this.wander().mult(0.3);
+
+    this.applyForce(sep);
+    this.applyForce(coh);
+    this.applyForce(ali);
+    this.applyForce(bounds);
+    this.applyForce(wander);
+
+    // --- Team-specific behavior ---
+    if (this.team === "red") {
+      // Red seeks the hive
+      let seekHive = this.seek(hivePos).mult(0.7);
+      this.applyForce(seekHive);
+
+      // Also seek nearest blue
+      let nearest = this.findNearest(enemies);
+      if (nearest && p5.Vector.dist(this.pos, nearest.pos) < CFG.PERCEPTION_RADIUS) {
+        let seekEnemy = this.seek(nearest.pos).mult(1.0);
+        this.applyForce(seekEnemy);
+      }
+    } else {
+      // Blue defends hive - orbit around it
+      let distToHive = p5.Vector.dist(this.pos, hivePos);
+      if (distToHive > CFG.HIVE_RADIUS * 2.5) {
+        let seekHome = this.seek(hivePos).mult(0.8);
+        this.applyForce(seekHome);
+      } else if (distToHive < CFG.HIVE_RADIUS * 0.8) {
+        let fleeCenter = this.flee(hivePos, CFG.HIVE_RADIUS).mult(0.5);
+        this.applyForce(fleeCenter);
+      }
+
+      // Engage nearest red
+      let nearest = this.findNearest(enemies);
+      if (nearest && p5.Vector.dist(this.pos, nearest.pos) < CFG.PERCEPTION_RADIUS * 0.8) {
+        let intercept = this.seek(nearest.pos).mult(1.2);
+        this.applyForce(intercept);
+      }
+    }
+
+    // Separate from enemies too
+    let enemySep = this.separate(enemies).mult(0.4);
+    this.applyForce(enemySep);
+
+    // --- Physics ---
+    this.vel.add(this.acc);
+    this.vel.limit(CFG.MAX_SPEED);
+    this.pos.add(this.vel);
+    this.acc.mult(0);
+
+    // --- Trail ---
+    this.trail.push(this.pos.copy());
+    if (this.trail.length > CFG.TRAIL_LENGTH) {
+      this.trail.shift();
+    }
+
+    // --- Combat ---
+    for (let enemy of enemies) {
+      if (!enemy.alive) continue;
+      let d = p5.Vector.dist(this.pos, enemy.pos);
+      if (d < CFG.FIGHT_RANGE) {
+        this.fighting = true;
+        enemy.fighting = true;
+        this.hp -= CFG.DAMAGE_PER_FRAME;
+        enemy.hp -= CFG.DAMAGE_PER_FRAME;
+
+        // Combat flash
+        if (frameCount % 4 === 0) {
+          let midPoint = p5.Vector.lerp(this.pos, enemy.pos, 0.5);
+          combatFlashes.push({
+            x: midPoint.x + random(-10, 10),
+            y: midPoint.y + random(-10, 10),
+            life: 1.0,
+            size: random(15, 35),
+            color: random() < 0.5
+              ? [255, 200, 100]
+              : [200, 255, 255],
+          });
+        }
+
+        // Scatter force
+        let repel = p5.Vector.sub(this.pos, enemy.pos);
+        repel.normalize().mult(0.15);
+        this.applyForce(repel);
+      }
+    }
+
+    // --- Death ---
+    if (this.hp <= 0) {
+      this.alive = false;
+      this.die();
+    }
+  }
+
+  findNearest(others) {
+    let nearest = null;
+    let minDist = Infinity;
+    for (let other of others) {
+      if (!other.alive) continue;
+      let d = p5.Vector.dist(this.pos, other.pos);
+      if (d < minDist) {
+        minDist = d;
+        nearest = other;
+      }
+    }
+    return nearest;
+  }
+
+  die() {
+    if (this.team === "red") blueScore++;
+    else redScore++;
+
+    // Burst into particles
+    for (let i = 0; i < CFG.DEATH_PARTICLES; i++) {
+      let angle = random(TWO_PI);
+      let speed = random(1, 4);
+      let col = this.team === "red"
+        ? [255, random(40, 120), random(20, 60)]
+        : [random(20, 80), random(100, 180), 255];
+      deathParticles.push({
+        x: this.pos.x,
+        y: this.pos.y,
+        vx: cos(angle) * speed,
+        vy: sin(angle) * speed,
+        life: 1.0,
+        decay: random(0.008, 0.025),
+        size: random(2, 7),
+        color: col,
+      });
+    }
+
+    // Larger burst flash
+    combatFlashes.push({
+      x: this.pos.x,
+      y: this.pos.y,
+      life: 1.0,
+      size: 60,
+      color: this.team === "red" ? [255, 120, 50] : [80, 180, 255],
+    });
+  }
+
+  display() {
+    if (!this.alive) return;
+
+    push();
+    // --- Additive blending ---
+    drawingContext.globalCompositeOperation = "lighter";
+
+    // --- Trail ---
+    noFill();
+    for (let i = 1; i < this.trail.length; i++) {
+      let alpha = map(i, 0, this.trail.length, 0, 120);
+      let weight = map(i, 0, this.trail.length, 0.5, this.size * 0.4);
+      let c = this.getColor(alpha);
+      stroke(c);
+      strokeWeight(weight);
+      line(this.trail[i - 1].x, this.trail[i - 1].y, this.trail[i].x, this.trail[i].y);
+    }
+
+    // --- Tentacles / tendrils ---
+    let baseAngle = atan2(this.vel.y, this.vel.x) + PI;
+    for (let t = 0; t < this.tentacleCount; t++) {
+      let tAngle = baseAngle + map(t, 0, this.tentacleCount - 1, -0.8, 0.8);
+      let segments = 6;
+      let prevX = this.pos.x;
+      let prevY = this.pos.y;
+      for (let s = 1; s <= segments; s++) {
+        let segLen = this.size * 0.8;
+        let wave = sin(this.tentaclePhase + frameCount * 0.08 + t * 1.2 + s * 0.6) * 0.3;
+        let cx = prevX + cos(tAngle + wave) * segLen;
+        let cy = prevY + sin(tAngle + wave) * segLen;
+        let alpha = map(s, 1, segments, 100, 10);
+        let w = map(s, 1, segments, 2.5, 0.3);
+        stroke(this.getColor(alpha));
+        strokeWeight(w);
+        line(prevX, prevY, cx, cy);
+        prevX = cx;
+        prevY = cy;
+      }
+    }
+
+    // --- Outer glow ---
+    noStroke();
+    let glowSize = this.size * 6;
+    if (this.fighting) {
+      glowSize *= 1.4 + sin(frameCount * 0.5) * 0.3;
+    }
+    let gc = this.getGlowColor(25);
+    fill(gc);
+    ellipse(this.pos.x, this.pos.y, glowSize, glowSize);
+
+    gc = this.getGlowColor(40);
+    fill(gc);
+    ellipse(this.pos.x, this.pos.y, glowSize * 0.6, glowSize * 0.6);
+
+    // --- Core body ---
+    let pulse = sin(this.pulsePhase + frameCount * 0.08) * 0.25 + 0.75;
+    let bodySize = this.size * pulse;
+    if (this.fighting) {
+      bodySize *= 1.2 + random(-0.1, 0.1);
+    }
+
+    // Inner bright core
+    fill(this.getColor(220));
+    ellipse(this.pos.x, this.pos.y, bodySize * 2, bodySize * 2);
+
+    // White-hot center
+    fill(255, 255, 255, 150 * pulse);
+    ellipse(this.pos.x, this.pos.y, bodySize * 0.8, bodySize * 0.8);
+
+    // --- HP bar (only if damaged) ---
+    if (this.hp < this.maxHp) {
+      drawingContext.globalCompositeOperation = "source-over";
+      let barW = 20;
+      let barH = 3;
+      let hpFrac = max(0, this.hp / this.maxHp);
+      noStroke();
+      fill(0, 0, 0, 120);
+      rect(this.pos.x - barW / 2 - 1, this.pos.y - this.size * 2.5 - 1, barW + 2, barH + 2, 2);
+      if (this.team === "red") fill(255, 80, 50, 200);
+      else fill(50, 150, 255, 200);
+      rect(this.pos.x - barW / 2, this.pos.y - this.size * 2.5, barW * hpFrac, barH, 2);
+    }
+
+    pop();
+  }
+}
+
+// --------------- DRAW ---------------
+function draw() {
+  // --- Deep-sea background gradient ---
+  drawBackground();
+
+  // --- Update timer ---
+  if (!gameOver && frameCount % 60 === 0 && timer > 0) {
+    timer--;
+  }
+
+  // --- Check win conditions ---
+  if (!gameOver) {
+    let redAlive = redSwarm.filter(a => a.alive).length;
+    let blueAlive = blueSwarm.filter(a => a.alive).length;
+
+    if (redAlive === 0) {
+      gameOver = true;
+      winner = "BLUE SWARM DEFENDED THE HIVE";
+    } else if (blueAlive === 0) {
+      gameOver = true;
+      winner = "RED SWARM DESTROYED THE HIVE";
+    } else if (timer <= 0) {
+      gameOver = true;
+      if (blueAlive > redAlive) winner = "BLUE SWARM DEFENDED THE HIVE";
+      else if (redAlive > blueAlive) winner = "RED SWARM OVERWHELMED THE HIVE";
+      else winner = "MUTUAL ANNIHILATION";
+    }
+  }
+
+  // --- Draw ambient particles ---
+  drawAmbientParticles();
+
+  // --- Draw hive ---
+  drawHive();
+
+  // --- Additive blending for everything ---
+  push();
+  drawingContext.globalCompositeOperation = "lighter";
+
+  // --- Update and draw death particles ---
+  for (let i = deathParticles.length - 1; i >= 0; i--) {
+    let p = deathParticles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vx *= 0.97;
+    p.vy *= 0.97;
+    p.life -= p.decay;
+
+    if (p.life <= 0) {
+      deathParticles.splice(i, 1);
+      continue;
+    }
+
+    noStroke();
+    fill(p.color[0], p.color[1], p.color[2], p.life * 200);
+    ellipse(p.x, p.y, p.size * p.life * 2, p.size * p.life * 2);
+    fill(p.color[0], p.color[1], p.color[2], p.life * 60);
+    ellipse(p.x, p.y, p.size * p.life * 5, p.size * p.life * 5);
+  }
+
+  // --- Combat flashes ---
+  for (let i = combatFlashes.length - 1; i >= 0; i--) {
+    let f = combatFlashes[i];
+    f.life -= 0.06;
+    if (f.life <= 0) {
+      combatFlashes.splice(i, 1);
+      continue;
+    }
+    noStroke();
+    fill(f.color[0], f.color[1], f.color[2], f.life * 120);
+    ellipse(f.x, f.y, f.size * f.life, f.size * f.life);
+    fill(255, 255, 255, f.life * 80);
+    ellipse(f.x, f.y, f.size * f.life * 0.4, f.size * f.life * 0.4);
+  }
+
+  pop();
+
+  // --- Update agents ---
+  if (!gameOver) {
+    for (let agent of redSwarm) {
+      agent.update(redSwarm, blueSwarm);
+    }
+    for (let agent of blueSwarm) {
+      agent.update(blueSwarm, redSwarm);
+    }
+  }
+
+  // --- Draw agents ---
+  for (let agent of redSwarm) agent.display();
+  for (let agent of blueSwarm) agent.display();
+
+  // --- Draw connection lines between nearby allies ---
+  drawConnectionLines(redSwarm);
+  drawConnectionLines(blueSwarm);
+
+  // --- HUD ---
+  drawHUD();
+
+  // --- Winner overlay ---
+  if (gameOver) {
+    drawWinnerScreen();
+  }
+
+  frameCounter++;
+}
+
+// --------------- BACKGROUND ---------------
+function drawBackground() {
+  // Deep ocean gradient with subtle movement
+  noStroke();
+  let steps = 12;
+  for (let i = 0; i < steps; i++) {
+    let t = i / steps;
+    let y1 = t * height;
+    let y2 = (t + 1 / steps) * height + 1;
+    let r = lerp(2, 8, t);
+    let g = lerp(5, 15, t);
+    let b = lerp(18, 30, t);
+    // Subtle color shift based on time
+    r += sin(frameCount * 0.005 + t * 3) * 3;
+    g += sin(frameCount * 0.007 + t * 2) * 4;
+    b += sin(frameCount * 0.003 + t * 4) * 5;
+    fill(r, g, b, 255);
+    rect(0, y1, width, y2 - y1);
+  }
+
+  // Faint caustic patterns
+  push();
+  drawingContext.globalCompositeOperation = "lighter";
+  noStroke();
+  for (let i = 0; i < 6; i++) {
+    let cx = width * 0.5 + sin(frameCount * 0.003 + i * 1.5) * width * 0.4;
+    let cy = height * 0.5 + cos(frameCount * 0.004 + i * 2.1) * height * 0.35;
+    let sz = 200 + sin(frameCount * 0.01 + i) * 80;
+    fill(10, 20, 40, 8);
+    ellipse(cx, cy, sz, sz * 0.7);
+  }
+  pop();
+}
+
+// --------------- AMBIENT PARTICLES ---------------
+function drawAmbientParticles() {
+  push();
+  drawingContext.globalCompositeOperation = "lighter";
+  noStroke();
+  for (let p of ambientParticles) {
+    p.x += p.vx;
+    p.y += p.vy;
+    if (p.x < -10) p.x = width + 10;
+    if (p.x > width + 10) p.x = -10;
+    if (p.y < -10) p.y = height + 10;
+    if (p.y > height + 10) p.y = -10;
+
+    let pulse = sin(frameCount * 0.02 + p.pulsePhase) * 0.4 + 0.6;
+    let a = p.alpha * pulse;
+    fill(p.color[0], p.color[1], p.color[2], a);
+    ellipse(p.x, p.y, p.size, p.size);
+    fill(p.color[0], p.color[1], p.color[2], a * 0.3);
+    ellipse(p.x, p.y, p.size * 3, p.size * 3);
+  }
+  pop();
+}
+
+// --------------- HIVE ---------------
+function drawHive() {
+  push();
+  drawingContext.globalCompositeOperation = "lighter";
+  noStroke();
+
+  // Hive breath
+  let breath = sin(frameCount * 0.02) * 0.15 + 1.0;
+
+  // Outer aura
+  let auraSize = CFG.HIVE_RADIUS * 4 * breath;
+  fill(10, 40, 100, 12);
+  ellipse(hivePos.x, hivePos.y, auraSize, auraSize);
+
+  fill(20, 60, 140, 18);
+  ellipse(hivePos.x, hivePos.y, auraSize * 0.65, auraSize * 0.65);
+
+  fill(30, 80, 180, 25);
+  ellipse(hivePos.x, hivePos.y, auraSize * 0.4, auraSize * 0.4);
+
+  // Rotating hive particles
+  for (let p of hiveParticles) {
+    p.angle += p.speed;
+    let wobble = sin(frameCount * 0.03 + p.pulsePhase) * 10;
+    let r = p.radius * breath + wobble;
+    let px = hivePos.x + cos(p.angle) * r;
+    let py = hivePos.y + sin(p.angle) * r;
+    let pulse = sin(frameCount * 0.04 + p.pulsePhase) * 0.4 + 0.6;
+    let a = p.alpha * pulse;
+
+    fill(60, 150, 255, a);
+    ellipse(px, py, p.size, p.size);
+    fill(100, 200, 255, a * 0.3);
+    ellipse(px, py, p.size * 3, p.size * 3);
+  }
+
+  // Core
+  let coreSize = 18 * breath;
+  fill(80, 180, 255, 50);
+  ellipse(hivePos.x, hivePos.y, coreSize * 3, coreSize * 3);
+  fill(140, 210, 255, 80);
+  ellipse(hivePos.x, hivePos.y, coreSize * 1.5, coreSize * 1.5);
+  fill(220, 240, 255, 120);
+  ellipse(hivePos.x, hivePos.y, coreSize * 0.6, coreSize * 0.6);
+
+  // Hive ring
+  noFill();
+  stroke(40, 120, 220, 25 + sin(frameCount * 0.03) * 15);
+  strokeWeight(1.5);
+  let ringR = CFG.HIVE_RADIUS * 2 * breath;
+  ellipse(hivePos.x, hivePos.y, ringR, ringR);
+
+  stroke(40, 120, 220, 15);
+  strokeWeight(0.8);
+  ringR = CFG.HIVE_RADIUS * 3 * breath;
+  for (let i = 0; i < 3; i++) {
+    let rr = ringR + i * 15;
+    let dashCount = 24 + i * 8;
+    for (let d = 0; d < dashCount; d++) {
+      let angle1 = (d / dashCount) * TWO_PI + frameCount * 0.002 * (i % 2 === 0 ? 1 : -1);
+      let angle2 = angle1 + (TWO_PI / dashCount) * 0.6;
+      let x1 = hivePos.x + cos(angle1) * rr * 0.5;
+      let y1 = hivePos.y + sin(angle1) * rr * 0.5;
+      let x2 = hivePos.x + cos(angle2) * rr * 0.5;
+      let y2 = hivePos.y + sin(angle2) * rr * 0.5;
+      line(x1, y1, x2, y2);
+    }
+  }
+
+  pop();
+}
+
+// --------------- CONNECTION LINES ---------------
+function drawConnectionLines(swarm) {
+  push();
+  drawingContext.globalCompositeOperation = "lighter";
+  for (let i = 0; i < swarm.length; i++) {
+    if (!swarm[i].alive) continue;
+    for (let j = i + 1; j < swarm.length; j++) {
+      if (!swarm[j].alive) continue;
+      let d = p5.Vector.dist(swarm[i].pos, swarm[j].pos);
+      if (d < 100) {
+        let alpha = map(d, 0, 100, 30, 0);
+        let c = swarm[i].getGlowColor(alpha);
+        stroke(c);
+        strokeWeight(0.6);
+        line(swarm[i].pos.x, swarm[i].pos.y, swarm[j].pos.x, swarm[j].pos.y);
+      }
+    }
+  }
+  pop();
+}
+
+// --------------- HUD ---------------
+function drawHUD() {
+  push();
+  drawingContext.globalCompositeOperation = "source-over";
+
+  // Semi-transparent panel at top
+  noStroke();
+  fill(0, 0, 0, 80);
+  rect(0, 0, width, 52, 0, 0, 0, 0);
+  // Subtle line
+  stroke(40, 80, 120, 60);
+  strokeWeight(1);
+  line(0, 52, width, 52);
+  noStroke();
+
+  let redAlive = redSwarm.filter(a => a.alive).length;
+  let blueAlive = blueSwarm.filter(a => a.alive).length;
+
+  // Timer
+  textAlign(CENTER, CENTER);
+  textSize(22);
+  let minutes = floor(timer / 60);
+  let seconds = timer % 60;
+  let timeStr = nf(minutes, 1) + ":" + nf(seconds, 2);
+
+  // Timer glow when low
+  if (timer <= 15) {
+    fill(255, 80, 60, 150 + sin(frameCount * 0.15) * 100);
+  } else {
+    fill(180, 200, 220, 200);
+  }
+  text(timeStr, width / 2, 26);
+
+  // Red info
+  textAlign(LEFT, CENTER);
+  textSize(14);
+  fill(255, 80, 50, 200);
+  text("ATTACKERS", 20, 16);
+  textSize(18);
+  fill(255, 100, 60, 230);
+  text(redAlive + " / " + CFG.RED_COUNT, 20, 36);
+
+  // Red score
+  textSize(12);
+  fill(255, 80, 50, 140);
+  text("KILLS: " + redScore, 130, 26);
+
+  // Blue info
+  textAlign(RIGHT, CENTER);
+  textSize(14);
+  fill(50, 150, 255, 200);
+  text("DEFENDERS", width - 20, 16);
+  textSize(18);
+  fill(60, 160, 255, 230);
+  text(blueAlive + " / " + CFG.BLUE_COUNT, width - 20, 36);
+
+  // Blue score
+  textSize(12);
+  fill(50, 150, 255, 140);
+  text("KILLS: " + blueScore, width - 130, 26);
+
+  // Label
+  textAlign(CENTER, CENTER);
+  textSize(9);
+  fill(80, 100, 120, 100);
+  text("ABYSSAL WARFARE", width / 2, 10);
+
+  pop();
+}
+
+// --------------- WINNER SCREEN ---------------
+function drawWinnerScreen() {
+  push();
+  drawingContext.globalCompositeOperation = "source-over";
+
+  // Darken overlay with fade-in
+  let fadeAlpha = min(180, (frameCounter - timer * 60) * 0.5 + 80);
+  fill(0, 0, 10, fadeAlpha);
+  rect(0, 0, width, height);
+
+  drawingContext.globalCompositeOperation = "lighter";
+
+  // Winner text glow
+  let pulse = sin(frameCount * 0.04) * 0.3 + 0.7;
+  let isRed = winner.includes("RED");
+
+  textAlign(CENTER, CENTER);
+
+  // Large glowing text
+  textSize(16);
+  if (isRed) {
+    fill(255, 60, 30, 60 * pulse);
+  } else if (winner.includes("MUTUAL")) {
+    fill(200, 100, 255, 60 * pulse);
+  } else {
+    fill(30, 120, 255, 60 * pulse);
+  }
+  text("SIMULATION COMPLETE", width / 2, height / 2 - 60);
+
+  textSize(28);
+  if (isRed) {
+    fill(255, 100, 50, 220 * pulse);
+  } else if (winner.includes("MUTUAL")) {
+    fill(220, 150, 255, 220 * pulse);
+  } else {
+    fill(80, 180, 255, 220 * pulse);
+  }
+  text(winner, width / 2, height / 2);
+
+  // Score summary
+  textSize(14);
+  fill(160, 180, 200, 150);
+  text(
+    "RED KILLS: " + redScore + "    BLUE KILLS: " + blueScore,
+    width / 2,
+    height / 2 + 45
+  );
+
+  textSize(13);
+  fill(100, 120, 140, 100 + sin(frameCount * 0.06) * 50);
+  text("click to restart", width / 2, height / 2 + 80);
+
+  pop();
+}
+
+// --------------- INTERACTIONS ---------------
+function mousePressed() {
+  if (gameOver) {
+    // Reset
+    redSwarm = [];
+    blueSwarm = [];
+    deathParticles = [];
+    combatFlashes = [];
+    redScore = 0;
+    blueScore = 0;
+    timer = CFG.MATCH_DURATION;
+    gameOver = false;
+    winner = "";
+    frameCounter = 0;
+
+    for (let i = 0; i < CFG.RED_COUNT; i++) {
+      redSwarm.push(new Agent(
+        random(60, width * 0.25),
+        random(height * 0.2, height * 0.8),
+        "red"
+      ));
+    }
+    for (let i = 0; i < CFG.BLUE_COUNT; i++) {
+      blueSwarm.push(new Agent(
+        random(width * 0.6, width * 0.85),
+        random(height * 0.2, height * 0.8),
+        "blue"
+      ));
+    }
+  }
+}
+
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+  hivePos = createVector(width * 0.78, height * 0.5);
+}
+</script>
+</body>
+</html>

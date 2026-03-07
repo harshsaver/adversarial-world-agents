@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Adversarial Simulation</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ============================================================
+// ADVERSARIAL SIMULATION DEMO
+// Red attacks, Blue defends. Pure Canvas API, zero dependencies.
+// ============================================================
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+// --- Resize ---
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// --- Constants ---
+const GAME_DURATION = 60;
+const UNIT_RADIUS = 12;
+const PROJECTILE_RADIUS = 3;
+const PROJECTILE_SPEED = 12;
+const SHOOT_RANGE = 200;
+const SHOOT_COOLDOWN = 45; // frames
+const UNIT_MAX_HP = 100;
+const PROJECTILE_DAMAGE = 12;
+const MAX_SPEED = 2.2;
+const OBSTACLE_COUNT = 10;
+const TRAIL_LENGTH = 12;
+const PARTICLE_COUNT = 14;
+
+// --- State ---
+let W, H;
+let obstacles = [];
+let redUnits = [];
+let blueUnits = [];
+let projectiles = [];
+let particles = [];
+let trails = []; // stored per-unit inside unit object
+let timer = GAME_DURATION;
+let frameCount = 0;
+let fps = 0;
+let fpsAccum = 0;
+let fpsLastTime = performance.now();
+let gameOver = false;
+let winner = '';
+let redScore = 0;
+let blueScore = 0;
+let baseX, baseY;
+
+// --- Utility ---
+function rand(a, b) { return a + Math.random() * (b - a); }
+function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function normalize(vx, vy) {
+  const m = Math.hypot(vx, vy);
+  if (m === 0) return { x: 0, y: 0 };
+  return { x: vx / m, y: vy / m };
+}
+
+// --- Obstacle ---
+function generateObstacles() {
+  obstacles = [];
+  W = canvas.width;
+  H = canvas.height;
+  const margin = 80;
+  for (let i = 0; i < OBSTACLE_COUNT; i++) {
+    let tries = 0;
+    let ob;
+    while (tries < 50) {
+      ob = {
+        x: rand(margin + 100, W - margin - 200),
+        y: rand(margin, H - margin - 60),
+        w: rand(40, 120),
+        h: rand(20, 80)
+      };
+      // keep away from base
+      const cx = ob.x + ob.w / 2;
+      const cy = ob.y + ob.h / 2;
+      if (Math.hypot(cx - baseX, cy - baseY) < 160) { tries++; continue; }
+      // keep away from spawn areas
+      if (ob.x < 140) { tries++; continue; }
+      break;
+    }
+    obstacles.push(ob);
+  }
+}
+
+function rectCircleCollide(rx, ry, rw, rh, cx, cy, cr) {
+  const nearX = clamp(cx, rx, rx + rw);
+  const nearY = clamp(cy, ry, ry + rh);
+  return Math.hypot(cx - nearX, cy - nearY) < cr;
+}
+
+function pushOutOfObstacles(unit) {
+  for (const ob of obstacles) {
+    if (rectCircleCollide(ob.x, ob.y, ob.w, ob.h, unit.x, unit.y, UNIT_RADIUS)) {
+      const cx = ob.x + ob.w / 2;
+      const cy = ob.y + ob.h / 2;
+      const n = normalize(unit.x - cx, unit.y - cy);
+      unit.x += n.x * 3;
+      unit.y += n.y * 3;
+      // kill velocity component into obstacle
+      const dot = unit.vx * n.x + unit.vy * n.y;
+      if (dot < 0) {
+        unit.vx -= dot * n.x;
+        unit.vy -= dot * n.y;
+      }
+    }
+  }
+}
+
+function lineObstacleBlocked(ax, ay, bx, by) {
+  // Simple check: sample along line
+  const d = Math.hypot(bx - ax, by - ay);
+  const steps = Math.ceil(d / 20);
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const px = ax + (bx - ax) * t;
+    const py = ay + (by - ay) * t;
+    for (const ob of obstacles) {
+      if (px >= ob.x && px <= ob.x + ob.w && py >= ob.y && py <= ob.y + ob.h) return true;
+    }
+  }
+  return false;
+}
+
+// --- Unit Factory ---
+function createUnit(x, y, team) {
+  return {
+    x, y, vx: 0, vy: 0,
+    hp: UNIT_MAX_HP,
+    team,
+    cooldown: Math.floor(rand(0, SHOOT_COOLDOWN)),
+    alive: true,
+    trail: [],
+    patrolAngle: rand(0, Math.PI * 2),
+    pulsePhase: rand(0, Math.PI * 2)
+  };
+}
+
+// --- Init ---
+function init() {
+  W = canvas.width;
+  H = canvas.height;
+  baseX = W - 120;
+  baseY = H / 2;
+  generateObstacles();
+
+  redUnits = [];
+  blueUnits = [];
+  projectiles = [];
+  particles = [];
+
+  for (let i = 0; i < 8; i++) {
+    redUnits.push(createUnit(rand(40, 100), rand(60, H - 60), 'red'));
+    const angle = (i / 8) * Math.PI * 2;
+    const bx = baseX + Math.cos(angle) * rand(60, 130);
+    const by = baseY + Math.sin(angle) * rand(60, 130);
+    blueUnits.push(createUnit(clamp(bx, 60, W - 60), clamp(by, 60, H - 60), 'blue'));
+  }
+
+  timer = GAME_DURATION;
+  frameCount = 0;
+  gameOver = false;
+  winner = '';
+  redScore = 0;
+  blueScore = 0;
+}
+
+// --- Steering / AI ---
+function steerToward(unit, tx, ty, weight) {
+  const dx = tx - unit.x;
+  const dy = ty - unit.y;
+  const n = normalize(dx, dy);
+  unit.vx += n.x * weight;
+  unit.vy += n.y * weight;
+}
+
+function avoidObstacles(unit) {
+  for (const ob of obstacles) {
+    const cx = ob.x + ob.w / 2;
+    const cy = ob.y + ob.h / 2;
+    const d = Math.hypot(unit.x - cx, unit.y - cy);
+    const avoidR = Math.max(ob.w, ob.h) * 0.9 + UNIT_RADIUS + 20;
+    if (d < avoidR && d > 0) {
+      const strength = (avoidR - d) / avoidR * 0.6;
+      const n = normalize(unit.x - cx, unit.y - cy);
+      unit.vx += n.x * strength;
+      unit.vy += n.y * strength;
+    }
+  }
+}
+
+function avoidEdges(unit) {
+  const margin = 30;
+  if (unit.x < margin) unit.vx += 0.5;
+  if (unit.x > W - margin) unit.vx -= 0.5;
+  if (unit.y < margin) unit.vy += 0.5;
+  if (unit.y > H - margin) unit.vy -= 0.5;
+}
+
+function separateUnits(unit, allUnits) {
+  for (const other of allUnits) {
+    if (other === unit || !other.alive) continue;
+    const d = dist(unit, other);
+    if (d < UNIT_RADIUS * 3 && d > 0) {
+      const strength = (UNIT_RADIUS * 3 - d) / (UNIT_RADIUS * 3) * 0.3;
+      const n = normalize(unit.x - other.x, unit.y - other.y);
+      unit.vx += n.x * strength;
+      unit.vy += n.y * strength;
+    }
+  }
+}
+
+function findNearest(unit, targets) {
+  let best = null, bestD = Infinity;
+  for (const t of targets) {
+    if (!t.alive) continue;
+    const d = dist(unit, t);
+    if (d < bestD) { bestD = d; best = t; }
+  }
+  return best;
+}
+
+function redAI(unit) {
+  // Move toward base, avoid obstacles, engage nearby blues
+  const nearBlue = findNearest(unit, blueUnits);
+  if (nearBlue && dist(unit, nearBlue) < SHOOT_RANGE * 1.2) {
+    // engage
+    steerToward(unit, nearBlue.x, nearBlue.y, 0.08);
+  } else {
+    // pathfind toward base
+    steerToward(unit, baseX, baseY, 0.12);
+  }
+  avoidObstacles(unit);
+  avoidEdges(unit);
+  separateUnits(unit, redUnits);
+  separateUnits(unit, blueUnits);
+}
+
+function blueAI(unit) {
+  const nearRed = findNearest(unit, redUnits);
+  if (nearRed && dist(unit, nearRed) < SHOOT_RANGE * 1.5) {
+    // intercept
+    steerToward(unit, nearRed.x, nearRed.y, 0.10);
+  } else {
+    // patrol near base
+    unit.patrolAngle += 0.008;
+    const px = baseX + Math.cos(unit.patrolAngle) * 120;
+    const py = baseY + Math.sin(unit.patrolAngle) * 120;
+    steerToward(unit, px, py, 0.06);
+  }
+  avoidObstacles(unit);
+  avoidEdges(unit);
+  separateUnits(unit, blueUnits);
+  separateUnits(unit, redUnits);
+}
+
+// --- Combat ---
+function tryShoot(unit, enemies) {
+  if (unit.cooldown > 0) { unit.cooldown--; return; }
+  const target = findNearest(unit, enemies);
+  if (!target) return;
+  const d = dist(unit, target);
+  if (d > SHOOT_RANGE) return;
+  if (lineObstacleBlocked(unit.x, unit.y, target.x, target.y)) return;
+
+  const n = normalize(target.x - unit.x, target.y - unit.y);
+  // lead the target slightly
+  const leadX = target.x + target.vx * (d / PROJECTILE_SPEED) * 0.5;
+  const leadY = target.y + target.vy * (d / PROJECTILE_SPEED) * 0.5;
+  const nl = normalize(leadX - unit.x, leadY - unit.y);
+  projectiles.push({
+    x: unit.x + nl.x * (UNIT_RADIUS + 4),
+    y: unit.y + nl.y * (UNIT_RADIUS + 4),
+    vx: nl.x * PROJECTILE_SPEED,
+    vy: nl.y * PROJECTILE_SPEED,
+    team: unit.team,
+    life: 80
+  });
+  unit.cooldown = SHOOT_COOLDOWN + Math.floor(rand(-5, 5));
+}
+
+// --- Particles ---
+function spawnExplosion(x, y, color) {
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const angle = rand(0, Math.PI * 2);
+    const speed = rand(1.5, 5);
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: rand(20, 45),
+      maxLife: 45,
+      r: rand(2, 5),
+      color
+    });
+  }
+}
+
+// --- Physics Update ---
+function updateUnit(unit) {
+  // clamp velocity
+  const speed = Math.hypot(unit.vx, unit.vy);
+  if (speed > MAX_SPEED) {
+    unit.vx = (unit.vx / speed) * MAX_SPEED;
+    unit.vy = (unit.vy / speed) * MAX_SPEED;
+  }
+  // friction
+  unit.vx *= 0.96;
+  unit.vy *= 0.96;
+
+  unit.x += unit.vx;
+  unit.y += unit.vy;
+
+  // boundaries
+  unit.x = clamp(unit.x, UNIT_RADIUS, W - UNIT_RADIUS);
+  unit.y = clamp(unit.y, UNIT_RADIUS, H - UNIT_RADIUS);
+
+  pushOutOfObstacles(unit);
+
+  // trail
+  unit.trail.push({ x: unit.x, y: unit.y, a: 1 });
+  if (unit.trail.length > TRAIL_LENGTH) unit.trail.shift();
+
+  unit.pulsePhase += 0.07;
+}
+
+function updateProjectiles() {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life--;
+
+    // obstacle hit
+    let hit = false;
+    for (const ob of obstacles) {
+      if (p.x >= ob.x && p.x <= ob.x + ob.w && p.y >= ob.y && p.y <= ob.y + ob.h) {
+        hit = true;
+        break;
+      }
+    }
+    if (hit || p.life <= 0 || p.x < 0 || p.x > W || p.y < 0 || p.y > H) {
+      projectiles.splice(i, 1);
+      continue;
+    }
+
+    // hit detection
+    const enemies = p.team === 'red' ? blueUnits : redUnits;
+    for (const u of enemies) {
+      if (!u.alive) continue;
+      if (dist(p, u) < UNIT_RADIUS + PROJECTILE_RADIUS) {
+        u.hp -= PROJECTILE_DAMAGE;
+        // small impact spark
+        spawnImpactSpark(p.x, p.y, p.team);
+        if (u.hp <= 0) {
+          u.alive = false;
+          spawnExplosion(u.x, u.y, u.team === 'red' ? '#ff4444' : '#4488ff');
+          if (u.team === 'red') blueScore++;
+          else redScore++;
+        }
+        projectiles.splice(i, 1);
+        break;
+      }
+    }
+  }
+}
+
+function spawnImpactSpark(x, y, fromTeam) {
+  for (let i = 0; i < 4; i++) {
+    const angle = rand(0, Math.PI * 2);
+    const speed = rand(1, 3);
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: rand(8, 16),
+      maxLife: 16,
+      r: rand(1, 3),
+      color: fromTeam === 'red' ? '#ffaa44' : '#44aaff'
+    });
+  }
+}
+
+function updateParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vx *= 0.96;
+    p.vy *= 0.96;
+    p.life--;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+// --- Check win/loss ---
+function checkGameState() {
+  const redsAlive = redUnits.filter(u => u.alive).length;
+  const bluesAlive = blueUnits.filter(u => u.alive).length;
+
+  // Red reaches base?
+  for (const u of redUnits) {
+    if (u.alive && dist(u, { x: baseX, y: baseY }) < 50) {
+      gameOver = true;
+      winner = 'RED TEAM WINS - Base Captured!';
+      return;
+    }
+  }
+  if (redsAlive === 0) {
+    gameOver = true;
+    winner = 'BLUE TEAM WINS - All Reds Eliminated!';
+    return;
+  }
+  if (bluesAlive === 0) {
+    gameOver = true;
+    winner = 'RED TEAM WINS - All Blues Eliminated!';
+    return;
+  }
+  if (timer <= 0) {
+    gameOver = true;
+    if (redsAlive > bluesAlive) winner = 'RED TEAM WINS - More Units Surviving!';
+    else if (bluesAlive > redsAlive) winner = 'BLUE TEAM WINS - Base Defended!';
+    else winner = 'DRAW - Stalemate!';
+  }
+}
+
+// ========================
+// RENDERING
+// ========================
+
+function drawBackground() {
+  // dark gradient
+  const grd = ctx.createLinearGradient(0, 0, W, H);
+  grd.addColorStop(0, '#0a0e17');
+  grd.addColorStop(0.5, '#0d1220');
+  grd.addColorStop(1, '#08101a');
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, W, H);
+
+  // grid lines
+  ctx.strokeStyle = 'rgba(40, 60, 90, 0.15)';
+  ctx.lineWidth = 1;
+  const gridSize = 60;
+  for (let x = 0; x < W; x += gridSize) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, H);
+    ctx.stroke();
+  }
+  for (let y = 0; y < H; y += gridSize) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(W, y);
+    ctx.stroke();
+  }
+}
+
+function drawObstacles() {
+  for (const ob of obstacles) {
+    // shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(ob.x + 3, ob.y + 3, ob.w, ob.h);
+    // body
+    const grd = ctx.createLinearGradient(ob.x, ob.y, ob.x, ob.y + ob.h);
+    grd.addColorStop(0, '#2a3040');
+    grd.addColorStop(1, '#1a2030');
+    ctx.fillStyle = grd;
+    ctx.fillRect(ob.x, ob.y, ob.w, ob.h);
+    // border
+    ctx.strokeStyle = 'rgba(80, 110, 150, 0.3)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(ob.x, ob.y, ob.w, ob.h);
+    // highlight
+    ctx.fillStyle = 'rgba(100, 140, 180, 0.08)';
+    ctx.fillRect(ob.x, ob.y, ob.w, 3);
+  }
+}
+
+function drawBase() {
+  const pulse = 0.6 + 0.4 * Math.sin(frameCount * 0.04);
+  // outer glow
+  const glowR = 55 + pulse * 10;
+  const grd = ctx.createRadialGradient(baseX, baseY, 10, baseX, baseY, glowR);
+  grd.addColorStop(0, `rgba(50, 120, 255, ${0.3 * pulse})`);
+  grd.addColorStop(0.6, `rgba(30, 80, 200, ${0.1 * pulse})`);
+  grd.addColorStop(1, 'rgba(20, 50, 150, 0)');
+  ctx.fillStyle = grd;
+  ctx.beginPath();
+  ctx.arc(baseX, baseY, glowR, 0, Math.PI * 2);
+  ctx.fill();
+
+  // hexagon
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const angle = (Math.PI / 3) * i - Math.PI / 6;
+    const r = 35;
+    const hx = baseX + Math.cos(angle) * r;
+    const hy = baseY + Math.sin(angle) * r;
+    if (i === 0) ctx.moveTo(hx, hy);
+    else ctx.lineTo(hx, hy);
+  }
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(30, 80, 180, 0.35)';
+  ctx.fill();
+  ctx.strokeStyle = `rgba(80, 160, 255, ${0.5 + 0.5 * pulse})`;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // inner hex
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const angle = (Math.PI / 3) * i - Math.PI / 6 + frameCount * 0.005;
+    const r = 18;
+    const hx = baseX + Math.cos(angle) * r;
+    const hy = baseY + Math.sin(angle) * r;
+    if (i === 0) ctx.moveTo(hx, hy);
+    else ctx.lineTo(hx, hy);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = `rgba(120, 200, 255, ${0.3 + 0.3 * pulse})`;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // label
+  ctx.fillStyle = `rgba(150, 200, 255, ${0.5 + 0.3 * pulse})`;
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('BASE', baseX, baseY + 4);
+}
+
+function drawTrail(unit) {
+  if (unit.trail.length < 2) return;
+  const color = unit.team === 'red' ? [255, 80, 60] : [60, 120, 255];
+  for (let i = 0; i < unit.trail.length - 1; i++) {
+    const t = i / unit.trail.length;
+    const p = unit.trail[i];
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, UNIT_RADIUS * 0.3 * t, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${color[0]}, ${color[1]}, ${color[2]}, ${t * 0.2})`;
+    ctx.fill();
+  }
+}
+
+function drawUnit(unit) {
+  if (!unit.alive) return;
+  const pulse = 0.7 + 0.3 * Math.sin(unit.pulsePhase);
+  const r = UNIT_RADIUS;
+
+  drawTrail(unit);
+
+  // glow
+  const glowColor = unit.team === 'red'
+    ? `rgba(255, 60, 40, ${0.25 * pulse})`
+    : `rgba(40, 100, 255, ${0.25 * pulse})`;
+  const grd = ctx.createRadialGradient(unit.x, unit.y, r * 0.3, unit.x, unit.y, r * 2.5);
+  grd.addColorStop(0, glowColor);
+  grd.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = grd;
+  ctx.beginPath();
+  ctx.arc(unit.x, unit.y, r * 2.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // body gradient
+  const bodyGrd = ctx.createRadialGradient(unit.x - r * 0.3, unit.y - r * 0.3, r * 0.1, unit.x, unit.y, r);
+  if (unit.team === 'red') {
+    bodyGrd.addColorStop(0, '#ff9966');
+    bodyGrd.addColorStop(0.5, '#ee4433');
+    bodyGrd.addColorStop(1, '#991122');
+  } else {
+    bodyGrd.addColorStop(0, '#88ccff');
+    bodyGrd.addColorStop(0.5, '#3388ee');
+    bodyGrd.addColorStop(1, '#112266');
+  }
+  ctx.beginPath();
+  ctx.arc(unit.x, unit.y, r, 0, Math.PI * 2);
+  ctx.fillStyle = bodyGrd;
+  ctx.fill();
+
+  // ring
+  ctx.strokeStyle = unit.team === 'red'
+    ? `rgba(255, 150, 100, ${0.4 + 0.3 * pulse})`
+    : `rgba(100, 170, 255, ${0.4 + 0.3 * pulse})`;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // direction indicator
+  const speed = Math.hypot(unit.vx, unit.vy);
+  if (speed > 0.3) {
+    const n = normalize(unit.vx, unit.vy);
+    ctx.beginPath();
+    ctx.arc(unit.x + n.x * r * 0.5, unit.y + n.y * r * 0.5, 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fill();
+  }
+
+  // HP bar
+  const barW = r * 2.2;
+  const barH = 3;
+  const barX = unit.x - barW / 2;
+  const barY = unit.y - r - 8;
+  const hpFrac = Math.max(0, unit.hp / UNIT_MAX_HP);
+
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
+
+  let hpColor;
+  if (hpFrac > 0.6) hpColor = '#44dd44';
+  else if (hpFrac > 0.3) hpColor = '#ddaa22';
+  else hpColor = '#dd3322';
+  ctx.fillStyle = hpColor;
+  ctx.fillRect(barX, barY, barW * hpFrac, barH);
+}
+
+function drawProjectile(p) {
+  const color = p.team === 'red' ? [255, 140, 60] : [60, 160, 255];
+  // glow
+  const grd = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, PROJECTILE_RADIUS * 3);
+  grd.addColorStop(0, `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0.6)`);
+  grd.addColorStop(1, `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0)`);
+  ctx.fillStyle = grd;
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, PROJECTILE_RADIUS * 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // core
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, PROJECTILE_RADIUS, 0, Math.PI * 2);
+  ctx.fillStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.beginPath();
+  ctx.arc(p.x, p.y, PROJECTILE_RADIUS * 0.4, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    const t = p.life / p.maxLife;
+    ctx.globalAlpha = t;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r * t, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// --- HUD ---
+function drawHUD() {
+  const redsAlive = redUnits.filter(u => u.alive).length;
+  const bluesAlive = blueUnits.filter(u => u.alive).length;
+
+  // top bar background
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+  ctx.fillRect(0, 0, W, 48);
+  ctx.fillStyle = 'rgba(60, 80, 110, 0.15)';
+  ctx.fillRect(0, 47, W, 1);
+
+  // Timer
+  const timeStr = Math.max(0, Math.ceil(timer)).toString().padStart(2, '0');
+  ctx.font = 'bold 26px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = timer <= 10 ? '#ff4444' : '#ccddee';
+  ctx.fillText(timeStr + 's', W / 2, 34);
+
+  // Red side
+  ctx.textAlign = 'left';
+  ctx.font = 'bold 14px monospace';
+  ctx.fillStyle = '#ff6644';
+  ctx.fillText('RED TEAM', 20, 20);
+  ctx.font = '12px monospace';
+  ctx.fillStyle = '#cc8877';
+  ctx.fillText(`Units: ${redsAlive}/8  |  Kills: ${blueScore}`, 20, 38);
+
+  // Blue side
+  ctx.textAlign = 'right';
+  ctx.font = 'bold 14px monospace';
+  ctx.fillStyle = '#4488ff';
+  ctx.fillText('BLUE TEAM', W - 20, 20);
+  ctx.font = '12px monospace';
+  ctx.fillStyle = '#7799cc';
+  ctx.fillText(`Units: ${bluesAlive}/8  |  Kills: ${redScore}`, W - 20, 38);
+
+  // FPS
+  ctx.textAlign = 'left';
+  ctx.font = '11px monospace';
+  ctx.fillStyle = 'rgba(150, 180, 200, 0.6)';
+  ctx.fillText(`FPS: ${fps}`, 10, H - 10);
+}
+
+// --- Minimap ---
+function drawMinimap() {
+  const mmW = 180;
+  const mmH = Math.floor(mmW * (H / W));
+  const mmX = W - mmW - 12;
+  const mmY = H - mmH - 12;
+  const sx = mmW / W;
+  const sy = mmH / H;
+
+  // bg
+  ctx.fillStyle = 'rgba(5, 10, 20, 0.75)';
+  ctx.fillRect(mmX, mmY, mmW, mmH);
+  ctx.strokeStyle = 'rgba(60, 90, 130, 0.5)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(mmX, mmY, mmW, mmH);
+
+  // obstacles
+  ctx.fillStyle = 'rgba(50, 70, 90, 0.6)';
+  for (const ob of obstacles) {
+    ctx.fillRect(mmX + ob.x * sx, mmY + ob.y * sy, ob.w * sx, ob.h * sy);
+  }
+
+  // base
+  ctx.fillStyle = 'rgba(50, 120, 255, 0.5)';
+  ctx.beginPath();
+  ctx.arc(mmX + baseX * sx, mmY + baseY * sy, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // units
+  for (const u of redUnits) {
+    if (!u.alive) continue;
+    ctx.fillStyle = '#ff4433';
+    ctx.beginPath();
+    ctx.arc(mmX + u.x * sx, mmY + u.y * sy, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  for (const u of blueUnits) {
+    if (!u.alive) continue;
+    ctx.fillStyle = '#3388ff';
+    ctx.beginPath();
+    ctx.arc(mmX + u.x * sx, mmY + u.y * sy, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // label
+  ctx.fillStyle = 'rgba(150, 180, 200, 0.4)';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('MINIMAP', mmX + 4, mmY + 11);
+}
+
+// --- Game Over Screen ---
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 42px monospace';
+  const isRed = winner.startsWith('RED');
+  const isDraw = winner.startsWith('DRAW');
+  ctx.fillStyle = isRed ? '#ff5533' : isDraw ? '#cccccc' : '#4499ff';
+  ctx.fillText(winner, W / 2, H / 2 - 20);
+
+  ctx.font = '16px monospace';
+  ctx.fillStyle = '#8899aa';
+  ctx.fillText(`Red Kills: ${blueScore}  |  Blue Kills: ${redScore}`, W / 2, H / 2 + 20);
+
+  ctx.font = '14px monospace';
+  ctx.fillStyle = 'rgba(150, 180, 210, 0.6)';
+  ctx.fillText('Click to restart', W / 2, H / 2 + 55);
+}
+
+// --- Shooting lines (visual feedback for combat range) ---
+function drawCombatLines() {
+  const allUnits = [...redUnits, ...blueUnits];
+  for (const u of allUnits) {
+    if (!u.alive) continue;
+    const enemies = u.team === 'red' ? blueUnits : redUnits;
+    const target = findNearest(u, enemies);
+    if (!target || dist(u, target) > SHOOT_RANGE) continue;
+    if (lineObstacleBlocked(u.x, u.y, target.x, target.y)) continue;
+    const d = dist(u, target);
+    const alpha = (1 - d / SHOOT_RANGE) * 0.08;
+    ctx.strokeStyle = u.team === 'red' ? `rgba(255,100,60,${alpha})` : `rgba(60,120,255,${alpha})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(u.x, u.y);
+    ctx.lineTo(target.x, target.y);
+    ctx.stroke();
+  }
+}
+
+// --- Main Loop ---
+let lastTime = performance.now();
+
+function update(dt) {
+  if (gameOver) return;
+
+  // timer
+  timer -= dt;
+
+  // AI + physics
+  for (const u of redUnits) {
+    if (!u.alive) continue;
+    redAI(u);
+    updateUnit(u);
+    tryShoot(u, blueUnits);
+  }
+  for (const u of blueUnits) {
+    if (!u.alive) continue;
+    blueAI(u);
+    updateUnit(u);
+    tryShoot(u, redUnits);
+  }
+
+  updateProjectiles();
+  updateParticles();
+  checkGameState();
+}
+
+function render() {
+  W = canvas.width;
+  H = canvas.height;
+
+  drawBackground();
+  drawObstacles();
+  drawBase();
+  drawCombatLines();
+
+  for (const u of redUnits) drawUnit(u);
+  for (const u of blueUnits) drawUnit(u);
+  for (const p of projectiles) drawProjectile(p);
+  drawParticles();
+
+  drawHUD();
+  drawMinimap();
+
+  if (gameOver) drawGameOver();
+}
+
+function loop(now) {
+  requestAnimationFrame(loop);
+
+  const dtMs = now - lastTime;
+  lastTime = now;
+  // cap dt to avoid spiral
+  const dt = Math.min(dtMs / 1000, 0.05);
+
+  // FPS counter
+  fpsAccum++;
+  if (now - fpsLastTime >= 1000) {
+    fps = fpsAccum;
+    fpsAccum = 0;
+    fpsLastTime = now;
+  }
+
+  frameCount++;
+  update(dt);
+  render();
+}
+
+// --- Restart on click ---
+canvas.addEventListener('click', () => {
+  if (gameOver) {
+    resize();
+    init();
+  }
+});
+
+// --- Boot ---
+init();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

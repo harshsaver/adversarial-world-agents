@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Adversarial Simulation - Red vs Blue</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { overflow: hidden; background: #000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+  canvas { display: block; }
+
+  #hud {
+    position: absolute; top: 0; left: 0; width: 100%; pointer-events: none;
+    padding: 20px 30px;
+    display: flex; justify-content: space-between; align-items: flex-start;
+  }
+
+  .hud-panel {
+    background: rgba(0,0,0,0.55);
+    border: 1px solid rgba(255,255,255,0.12);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-radius: 12px;
+    padding: 14px 22px;
+    color: #fff;
+    font-size: 14px;
+    line-height: 1.7;
+    min-width: 160px;
+  }
+
+  .hud-panel.center {
+    text-align: center;
+    min-width: 200px;
+  }
+
+  .hud-panel .label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    opacity: 0.5;
+  }
+
+  .hud-panel .timer {
+    font-size: 32px;
+    font-weight: 300;
+    letter-spacing: 3px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .red-text { color: #ff4444; font-weight: 600; }
+  .blue-text { color: #4488ff; font-weight: 600; }
+
+  .team-count {
+    font-size: 28px;
+    font-weight: 200;
+  }
+
+  #overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    display: none;
+    justify-content: center; align-items: center;
+    pointer-events: none;
+    z-index: 100;
+  }
+
+  #overlay.visible {
+    display: flex;
+  }
+
+  #overlay .winner-box {
+    background: rgba(0,0,0,0.75);
+    border: 1px solid rgba(255,255,255,0.15);
+    backdrop-filter: blur(20px);
+    border-radius: 20px;
+    padding: 40px 70px;
+    text-align: center;
+    animation: popIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  #overlay .winner-title {
+    font-size: 48px;
+    font-weight: 200;
+    color: #fff;
+    letter-spacing: 6px;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+
+  #overlay .winner-sub {
+    font-size: 14px;
+    color: rgba(255,255,255,0.4);
+    letter-spacing: 3px;
+    text-transform: uppercase;
+  }
+
+  @keyframes popIn {
+    0% { transform: scale(0.7); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+
+  #restart-btn {
+    position: absolute;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.2);
+    color: #fff;
+    font-size: 14px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 12px 36px;
+    border-radius: 8px;
+    cursor: pointer;
+    pointer-events: auto;
+    display: none;
+    transition: background 0.3s;
+    z-index: 101;
+  }
+  #restart-btn:hover {
+    background: rgba(255,255,255,0.2);
+  }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div class="hud-panel">
+    <div class="label">Red Army</div>
+    <div class="team-count red-text" id="red-count">5</div>
+    <div class="label" style="margin-top:4px;">Attackers</div>
+  </div>
+  <div class="hud-panel center">
+    <div class="label">Battle Timer</div>
+    <div class="timer" id="timer">00:00</div>
+    <div class="label" style="margin-top:4px;">Engagement Active</div>
+  </div>
+  <div class="hud-panel" style="text-align:right;">
+    <div class="label">Blue Army</div>
+    <div class="team-count blue-text" id="blue-count">5</div>
+    <div class="label" style="margin-top:4px;">Defenders</div>
+  </div>
+</div>
+
+<div id="overlay">
+  <div class="winner-box">
+    <div class="winner-title" id="winner-text">Victory</div>
+    <div class="winner-sub" id="winner-sub">Battle concluded</div>
+  </div>
+</div>
+
+<button id="restart-btn" onclick="restartSimulation()">Restart Battle</button>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"></script>
+
+<script>
+// ─── GLOBALS ────────────────────────────────────────────────
+let scene, camera, renderer, world;
+let clock, elapsedTime = 0;
+let redUnits = [], blueUnits = [], allFlashes = [];
+let baseMesh, baseGlow;
+let gameOver = false;
+let particles = [];
+const ARENA_SIZE = 30;
+const WALL_HEIGHT = 4;
+const BASE_POS = new THREE.Vector3(0, 0, 12);
+const UNIT_RADIUS = 0.8;
+const DAMAGE_PER_HIT = 12;
+const ATTACK_RANGE = 2.2;
+const ATTACK_COOLDOWN = 0.6;
+const MAX_HP = 100;
+
+// ─── INIT ───────────────────────────────────────────────────
+function init() {
+  // Scene
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x080810);
+  scene.fog = new THREE.FogExp2(0x080810, 0.022);
+
+  // Camera
+  camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200);
+  camera.position.set(0, 35, 40);
+  camera.lookAt(0, 0, 0);
+
+  // Renderer
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.2;
+  document.body.appendChild(renderer.domElement);
+
+  // Physics world
+  world = new CANNON.World({
+    gravity: new CANNON.Vec3(0, -20, 0)
+  });
+  world.broadphase = new CANNON.SAPBroadphase(world);
+  world.allowSleep = true;
+
+  clock = new THREE.Clock();
+
+  createLighting();
+  createArena();
+  createBase();
+  spawnTeams();
+
+  window.addEventListener('resize', onResize);
+  animate();
+}
+
+// ─── LIGHTING ───────────────────────────────────────────────
+function createLighting() {
+  // Ambient
+  const ambient = new THREE.AmbientLight(0x1a1a2e, 0.6);
+  scene.add(ambient);
+
+  // Hemisphere
+  const hemi = new THREE.HemisphereLight(0x2244aa, 0x442211, 0.4);
+  scene.add(hemi);
+
+  // Main directional (sun)
+  const dirLight = new THREE.DirectionalLight(0xffeedd, 1.0);
+  dirLight.position.set(15, 30, 10);
+  dirLight.castShadow = true;
+  dirLight.shadow.mapSize.width = 2048;
+  dirLight.shadow.mapSize.height = 2048;
+  dirLight.shadow.camera.left = -40;
+  dirLight.shadow.camera.right = 40;
+  dirLight.shadow.camera.top = 40;
+  dirLight.shadow.camera.bottom = -40;
+  dirLight.shadow.camera.near = 1;
+  dirLight.shadow.camera.far = 80;
+  dirLight.shadow.bias = -0.002;
+  scene.add(dirLight);
+
+  // Back fill
+  const backLight = new THREE.DirectionalLight(0x4466cc, 0.3);
+  backLight.position.set(-10, 15, -15);
+  scene.add(backLight);
+
+  // Dramatic point lights
+  const redAccent = new THREE.PointLight(0xff2200, 2, 35);
+  redAccent.position.set(-10, 8, -14);
+  scene.add(redAccent);
+
+  const blueAccent = new THREE.PointLight(0x0044ff, 2, 35);
+  blueAccent.position.set(5, 8, 14);
+  scene.add(blueAccent);
+}
+
+// ─── ARENA ──────────────────────────────────────────────────
+function createArena() {
+  // Ground
+  const groundGeo = new THREE.BoxGeometry(ARENA_SIZE * 2, 0.5, ARENA_SIZE * 2);
+  const groundMat = new THREE.MeshStandardMaterial({
+    color: 0x111122,
+    roughness: 0.85,
+    metalness: 0.15
+  });
+  const ground = new THREE.Mesh(groundGeo, groundMat);
+  ground.position.y = -0.25;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // Ground grid effect
+  const gridHelper = new THREE.GridHelper(ARENA_SIZE * 2, 40, 0x222244, 0x181830);
+  gridHelper.position.y = 0.01;
+  scene.add(gridHelper);
+
+  // Ground physics
+  const groundBody = new CANNON.Body({
+    type: CANNON.Body.STATIC,
+    shape: new CANNON.Box(new CANNON.Vec3(ARENA_SIZE, 0.25, ARENA_SIZE))
+  });
+  groundBody.position.set(0, -0.25, 0);
+  world.addBody(groundBody);
+
+  // Walls
+  const wallMat = new THREE.MeshStandardMaterial({
+    color: 0x1a1a3a,
+    roughness: 0.5,
+    metalness: 0.6,
+    transparent: true,
+    opacity: 0.35
+  });
+
+  const wallData = [
+    { pos: [0, WALL_HEIGHT / 2, -ARENA_SIZE], size: [ARENA_SIZE, WALL_HEIGHT / 2, 0.3] },
+    { pos: [0, WALL_HEIGHT / 2, ARENA_SIZE], size: [ARENA_SIZE, WALL_HEIGHT / 2, 0.3] },
+    { pos: [-ARENA_SIZE, WALL_HEIGHT / 2, 0], size: [0.3, WALL_HEIGHT / 2, ARENA_SIZE] },
+    { pos: [ARENA_SIZE, WALL_HEIGHT / 2, 0], size: [0.3, WALL_HEIGHT / 2, ARENA_SIZE] },
+  ];
+
+  wallData.forEach(w => {
+    const geo = new THREE.BoxGeometry(w.size[0] * 2, w.size[1] * 2, w.size[2] * 2);
+    const mesh = new THREE.Mesh(geo, wallMat);
+    mesh.position.set(...w.pos);
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+
+    // Wall edge glow
+    const edgeGeo = new THREE.BoxGeometry(w.size[0] * 2 + 0.1, 0.08, w.size[2] * 2 + 0.1);
+    const edgeMat = new THREE.MeshBasicMaterial({ color: 0x3344aa, transparent: true, opacity: 0.4 });
+    const edge = new THREE.Mesh(edgeGeo, edgeMat);
+    edge.position.set(w.pos[0], 0.02, w.pos[2]);
+    scene.add(edge);
+
+    const body = new CANNON.Body({
+      type: CANNON.Body.STATIC,
+      shape: new CANNON.Box(new CANNON.Vec3(...w.size))
+    });
+    body.position.set(...w.pos);
+    world.addBody(body);
+  });
+}
+
+// ─── BASE STRUCTURE ─────────────────────────────────────────
+function createBase() {
+  // Central crystal / base
+  const baseGeo = new THREE.OctahedronGeometry(2, 0);
+  const baseMat = new THREE.MeshStandardMaterial({
+    color: 0x2266ff,
+    emissive: 0x1144cc,
+    emissiveIntensity: 0.8,
+    roughness: 0.2,
+    metalness: 0.8,
+    transparent: true,
+    opacity: 0.85
+  });
+  baseMesh = new THREE.Mesh(baseGeo, baseMat);
+  baseMesh.position.copy(BASE_POS);
+  baseMesh.position.y = 2.5;
+  baseMesh.castShadow = true;
+  scene.add(baseMesh);
+
+  // Base glow sphere
+  const glowGeo = new THREE.SphereGeometry(3.5, 32, 32);
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: 0x2255ff,
+    transparent: true,
+    opacity: 0.08
+  });
+  baseGlow = new THREE.Mesh(glowGeo, glowMat);
+  baseGlow.position.copy(baseMesh.position);
+  scene.add(baseGlow);
+
+  // Base pedestal
+  const pedGeo = new THREE.CylinderGeometry(2.5, 3, 0.5, 6);
+  const pedMat = new THREE.MeshStandardMaterial({
+    color: 0x1a2266,
+    roughness: 0.3,
+    metalness: 0.7
+  });
+  const pedestal = new THREE.Mesh(pedGeo, pedMat);
+  pedestal.position.set(BASE_POS.x, 0.25, BASE_POS.z);
+  pedestal.receiveShadow = true;
+  pedestal.castShadow = true;
+  scene.add(pedestal);
+
+  // Base point light
+  const baseLight = new THREE.PointLight(0x3366ff, 4, 20);
+  baseLight.position.copy(baseMesh.position);
+  baseLight.position.y += 1;
+  scene.add(baseLight);
+
+  // Ring markers
+  const ringGeo = new THREE.TorusGeometry(4, 0.06, 8, 48);
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0x3366ff, transparent: true, opacity: 0.3 });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.position.set(BASE_POS.x, 0.05, BASE_POS.z);
+  ring.rotation.x = -Math.PI / 2;
+  scene.add(ring);
+}
+
+// ─── UNIT FACTORY ───────────────────────────────────────────
+function createUnit(team, index) {
+  const isRed = team === 'red';
+  const color = isRed ? 0xff2222 : 0x2288ff;
+  const emissive = isRed ? 0x881111 : 0x114488;
+
+  // Mesh
+  const geo = new THREE.SphereGeometry(UNIT_RADIUS, 24, 24);
+  const mat = new THREE.MeshStandardMaterial({
+    color: color,
+    emissive: emissive,
+    emissiveIntensity: 0.6,
+    roughness: 0.25,
+    metalness: 0.6,
+    transparent: true,
+    opacity: 1
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+
+  // Start positions
+  const spread = 5;
+  let x, z;
+  if (isRed) {
+    x = -8 + (index % 3) * spread - 2;
+    z = -ARENA_SIZE + 5 + Math.floor(index / 3) * 4;
+  } else {
+    x = -4 + (index % 3) * spread - 1;
+    z = BASE_POS.z - 5 - Math.floor(index / 3) * 3;
+  }
+
+  mesh.position.set(x, UNIT_RADIUS, z);
+  scene.add(mesh);
+
+  // Point light per unit
+  const unitLight = new THREE.PointLight(color, 1.5, 8);
+  unitLight.position.copy(mesh.position);
+  unitLight.position.y += 0.5;
+  scene.add(unitLight);
+
+  // Trail ring on ground
+  const trailGeo = new THREE.RingGeometry(0.3, 0.5, 16);
+  const trailMat = new THREE.MeshBasicMaterial({
+    color: color,
+    transparent: true,
+    opacity: 0.4,
+    side: THREE.DoubleSide
+  });
+  const trail = new THREE.Mesh(trailGeo, trailMat);
+  trail.rotation.x = -Math.PI / 2;
+  trail.position.set(x, 0.02, z);
+  scene.add(trail);
+
+  // Physics body
+  const body = new CANNON.Body({
+    mass: 5,
+    shape: new CANNON.Sphere(UNIT_RADIUS),
+    linearDamping: 0.5,
+    angularDamping: 0.6,
+    material: new CANNON.Material({ friction: 0.4, restitution: 0.3 })
+  });
+  body.position.set(x, UNIT_RADIUS, z);
+  world.addBody(body);
+
+  return {
+    mesh, body, light: unitLight, trail, team,
+    hp: MAX_HP,
+    alive: true,
+    attackTimer: 0,
+    deathTimer: 0,
+    targetUnit: null,
+    originalRadius: UNIT_RADIUS
+  };
+}
+
+function spawnTeams() {
+  for (let i = 0; i < 5; i++) {
+    redUnits.push(createUnit('red', i));
+  }
+  for (let i = 0; i < 5; i++) {
+    blueUnits.push(createUnit('blue', i));
+  }
+}
+
+// ─── FLASH EFFECT ───────────────────────────────────────────
+function createFlash(position, color) {
+  const geo = new THREE.SphereGeometry(0.5, 12, 12);
+  const mat = new THREE.MeshBasicMaterial({
+    color: color || 0xffffff,
+    transparent: true,
+    opacity: 1
+  });
+  const flash = new THREE.Mesh(geo, mat);
+  flash.position.copy(position);
+  flash.position.y += 0.5;
+  scene.add(flash);
+  allFlashes.push({ mesh: flash, life: 1.0 });
+
+  // Spawn particles
+  for (let i = 0; i < 6; i++) {
+    const pGeo = new THREE.SphereGeometry(0.08, 6, 6);
+    const pMat = new THREE.MeshBasicMaterial({
+      color: color || 0xffaa44,
+      transparent: true,
+      opacity: 1
+    });
+    const p = new THREE.Mesh(pGeo, pMat);
+    p.position.copy(position);
+    p.position.y += 0.5;
+    scene.add(p);
+    particles.push({
+      mesh: p,
+      vel: new THREE.Vector3(
+        (Math.random() - 0.5) * 8,
+        Math.random() * 6 + 2,
+        (Math.random() - 0.5) * 8
+      ),
+      life: 1.0
+    });
+  }
+}
+
+// ─── AI LOGIC ───────────────────────────────────────────────
+function updateAI(dt) {
+  const speed = 12;
+
+  // Red AI: move toward base
+  redUnits.forEach(unit => {
+    if (!unit.alive) return;
+    unit.attackTimer = Math.max(0, unit.attackTimer - dt);
+
+    const pos = unit.body.position;
+    const toBase = new CANNON.Vec3(
+      BASE_POS.x - pos.x,
+      0,
+      BASE_POS.z - pos.z
+    );
+    const dist = Math.sqrt(toBase.x * toBase.x + toBase.z * toBase.z);
+
+    // Check if near a blue unit - fight it
+    let nearestBlue = null;
+    let nearestDist = Infinity;
+    blueUnits.forEach(b => {
+      if (!b.alive) return;
+      const d = pos.distanceTo(b.body.position);
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearestBlue = b;
+      }
+    });
+
+    if (nearestBlue && nearestDist < 6) {
+      // Engage blue unit
+      const toBlu = new CANNON.Vec3(
+        nearestBlue.body.position.x - pos.x,
+        0,
+        nearestBlue.body.position.z - pos.z
+      );
+      const dBlu = Math.sqrt(toBlu.x * toBlu.x + toBlu.z * toBlu.z);
+      if (dBlu > 0.01) {
+        toBlu.x /= dBlu; toBlu.z /= dBlu;
+        unit.body.applyForce(new CANNON.Vec3(toBlu.x * speed, 0, toBlu.z * speed));
+      }
+
+      // Attack
+      if (nearestDist < ATTACK_RANGE && unit.attackTimer <= 0) {
+        dealDamage(unit, nearestBlue);
+        unit.attackTimer = ATTACK_COOLDOWN;
+      }
+    } else {
+      // Move to base
+      if (dist > 1) {
+        toBase.x /= dist; toBase.z /= dist;
+        unit.body.applyForce(new CANNON.Vec3(toBase.x * speed, 0, toBase.z * speed));
+      }
+    }
+  });
+
+  // Blue AI: intercept nearest red
+  blueUnits.forEach(unit => {
+    if (!unit.alive) return;
+    unit.attackTimer = Math.max(0, unit.attackTimer - dt);
+
+    const pos = unit.body.position;
+    let nearestRed = null;
+    let nearestDist = Infinity;
+    redUnits.forEach(r => {
+      if (!r.alive) return;
+      const d = pos.distanceTo(r.body.position);
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearestRed = r;
+      }
+    });
+
+    if (nearestRed) {
+      const toRed = new CANNON.Vec3(
+        nearestRed.body.position.x - pos.x,
+        0,
+        nearestRed.body.position.z - pos.z
+      );
+      const dR = Math.sqrt(toRed.x * toRed.x + toRed.z * toRed.z);
+
+      // Only chase if the red is somewhat close or heading toward base
+      const chaseRange = 22;
+      if (dR < chaseRange && dR > 0.01) {
+        toRed.x /= dR; toRed.z /= dR;
+        const blueSpeed = speed * 1.1; // Slightly faster to intercept
+        unit.body.applyForce(new CANNON.Vec3(toRed.x * blueSpeed, 0, toRed.z * blueSpeed));
+      }
+
+      // Attack
+      if (nearestDist < ATTACK_RANGE && unit.attackTimer <= 0) {
+        dealDamage(unit, nearestRed);
+        unit.attackTimer = ATTACK_COOLDOWN;
+      }
+    } else {
+      // No reds alive — return to base area
+      const toBase = new CANNON.Vec3(
+        BASE_POS.x - pos.x,
+        0,
+        BASE_POS.z - pos.z
+      );
+      const db = Math.sqrt(toBase.x * toBase.x + toBase.z * toBase.z);
+      if (db > 3) {
+        toBase.x /= db; toBase.z /= db;
+        unit.body.applyForce(new CANNON.Vec3(toBase.x * speed * 0.5, 0, toBase.z * speed * 0.5));
+      }
+    }
+  });
+}
+
+function dealDamage(attacker, target) {
+  target.hp -= DAMAGE_PER_HIT;
+
+  const midPoint = new THREE.Vector3(
+    (attacker.body.position.x + target.body.position.x) / 2,
+    (attacker.body.position.y + target.body.position.y) / 2,
+    (attacker.body.position.z + target.body.position.z) / 2
+  );
+
+  const flashColor = target.team === 'red' ? 0xff4444 : 0x4488ff;
+  createFlash(midPoint, flashColor);
+
+  // Knockback
+  const dir = new CANNON.Vec3(
+    target.body.position.x - attacker.body.position.x,
+    1,
+    target.body.position.z - attacker.body.position.z
+  );
+  dir.normalize();
+  target.body.applyImpulse(new CANNON.Vec3(dir.x * 8, dir.y * 4, dir.z * 8));
+
+  // Shrink based on HP
+  const scale = Math.max(0.3, target.hp / MAX_HP);
+  target.mesh.scale.setScalar(scale);
+  target.light.intensity = 1.5 * scale;
+
+  if (target.hp <= 0) {
+    target.alive = false;
+    target.deathTimer = 1.0;
+  }
+}
+
+// ─── UPDATE UNITS ───────────────────────────────────────────
+function updateUnits(dt) {
+  const allUnits = [...redUnits, ...blueUnits];
+  allUnits.forEach(unit => {
+    if (unit.alive) {
+      // Sync mesh to physics body
+      unit.mesh.position.copy(unit.body.position);
+      unit.mesh.quaternion.copy(unit.body.quaternion);
+      unit.light.position.set(
+        unit.body.position.x,
+        unit.body.position.y + 1,
+        unit.body.position.z
+      );
+      unit.trail.position.set(
+        unit.body.position.x,
+        0.02,
+        unit.body.position.z
+      );
+
+      // Pulsing emissive
+      const pulse = 0.4 + Math.sin(elapsedTime * 3 + unit.body.position.x) * 0.3;
+      unit.mesh.material.emissiveIntensity = pulse;
+
+    } else if (unit.deathTimer > 0) {
+      // Death fade
+      unit.deathTimer -= dt * 1.5;
+      const alpha = Math.max(0, unit.deathTimer);
+      unit.mesh.material.opacity = alpha;
+      unit.trail.material.opacity = alpha * 0.4;
+      unit.light.intensity = alpha * 1.5;
+      unit.mesh.position.y += dt * 2; // Float up
+
+      if (unit.deathTimer <= 0) {
+        scene.remove(unit.mesh);
+        scene.remove(unit.light);
+        scene.remove(unit.trail);
+        world.removeBody(unit.body);
+      }
+    }
+  });
+}
+
+// ─── FLASH & PARTICLE UPDATE ────────────────────────────────
+function updateEffects(dt) {
+  // Flashes
+  for (let i = allFlashes.length - 1; i >= 0; i--) {
+    const f = allFlashes[i];
+    f.life -= dt * 4;
+    f.mesh.scale.setScalar(1 + (1 - f.life) * 3);
+    f.mesh.material.opacity = Math.max(0, f.life);
+    if (f.life <= 0) {
+      scene.remove(f.mesh);
+      allFlashes.splice(i, 1);
+    }
+  }
+
+  // Particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life -= dt * 2.5;
+    p.vel.y -= 15 * dt; // gravity
+    p.mesh.position.x += p.vel.x * dt;
+    p.mesh.position.y += p.vel.y * dt;
+    p.mesh.position.z += p.vel.z * dt;
+    p.mesh.material.opacity = Math.max(0, p.life);
+    p.mesh.scale.setScalar(p.life);
+    if (p.life <= 0) {
+      scene.remove(p.mesh);
+      particles.splice(i, 1);
+    }
+  }
+}
+
+// ─── HUD UPDATE ─────────────────────────────────────────────
+function updateHUD() {
+  const minutes = Math.floor(elapsedTime / 60);
+  const seconds = Math.floor(elapsedTime % 60);
+  document.getElementById('timer').textContent =
+    String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+
+  const redAlive = redUnits.filter(u => u.alive).length;
+  const blueAlive = blueUnits.filter(u => u.alive).length;
+  document.getElementById('red-count').textContent = redAlive;
+  document.getElementById('blue-count').textContent = blueAlive;
+
+  // Check win condition
+  if (!gameOver) {
+    if (redAlive === 0) {
+      endGame('Blue Wins', 'All attackers eliminated');
+    } else if (blueAlive === 0) {
+      endGame('Red Wins', 'All defenders eliminated');
+    } else {
+      // Check if red reached base
+      const redAtBase = redUnits.some(u => {
+        if (!u.alive) return false;
+        const dx = u.body.position.x - BASE_POS.x;
+        const dz = u.body.position.z - BASE_POS.z;
+        return Math.sqrt(dx * dx + dz * dz) < 3;
+      });
+      if (redAtBase && blueAlive === 0) {
+        endGame('Red Wins', 'Base captured');
+      }
+    }
+  }
+}
+
+function endGame(title, sub) {
+  gameOver = true;
+  document.getElementById('winner-text').textContent = title;
+  document.getElementById('winner-text').style.color =
+    title.includes('Red') ? '#ff4444' : '#4488ff';
+  document.getElementById('winner-sub').textContent = sub;
+  document.getElementById('overlay').classList.add('visible');
+  document.getElementById('restart-btn').style.display = 'block';
+}
+
+// ─── CAMERA ─────────────────────────────────────────────────
+function updateCamera() {
+  const angle = elapsedTime * 0.08;
+  const radius = 45;
+  const height = 30;
+  camera.position.x = Math.sin(angle) * radius;
+  camera.position.z = Math.cos(angle) * radius;
+  camera.position.y = height + Math.sin(elapsedTime * 0.15) * 3;
+  camera.lookAt(0, 0, 2);
+}
+
+// ─── ANIMATE BASE ───────────────────────────────────────────
+function updateBase() {
+  if (baseMesh) {
+    baseMesh.rotation.y += 0.005;
+    baseMesh.position.y = 2.5 + Math.sin(elapsedTime * 1.5) * 0.3;
+    baseGlow.scale.setScalar(1 + Math.sin(elapsedTime * 2) * 0.08);
+    baseGlow.material.opacity = 0.06 + Math.sin(elapsedTime * 2) * 0.03;
+  }
+}
+
+// ─── MAIN LOOP ──────────────────────────────────────────────
+function animate() {
+  requestAnimationFrame(animate);
+
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (!gameOver) {
+    elapsedTime += dt;
+  }
+
+  // Physics step
+  world.step(1 / 60, dt, 3);
+
+  if (!gameOver) {
+    updateAI(dt);
+  }
+  updateUnits(dt);
+  updateEffects(dt);
+  updateBase();
+  updateCamera();
+  updateHUD();
+
+  renderer.render(scene, camera);
+}
+
+// ─── RESIZE ─────────────────────────────────────────────────
+function onResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+// ─── RESTART ────────────────────────────────────────────────
+function restartSimulation() {
+  // Clean up
+  [...redUnits, ...blueUnits].forEach(u => {
+    if (u.mesh.parent) scene.remove(u.mesh);
+    if (u.light.parent) scene.remove(u.light);
+    if (u.trail.parent) scene.remove(u.trail);
+    try { world.removeBody(u.body); } catch(e) {}
+  });
+  allFlashes.forEach(f => { if (f.mesh.parent) scene.remove(f.mesh); });
+  particles.forEach(p => { if (p.mesh.parent) scene.remove(p.mesh); });
+
+  redUnits = [];
+  blueUnits = [];
+  allFlashes = [];
+  particles = [];
+  elapsedTime = 0;
+  gameOver = false;
+
+  document.getElementById('overlay').classList.remove('visible');
+  document.getElementById('restart-btn').style.display = 'none';
+
+  spawnTeams();
+}
+
+// ─── START ──────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
