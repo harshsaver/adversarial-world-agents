@@ -14,163 +14,191 @@
     overflow: hidden; user-select: none;
   }
 
-  /* ── CONFIG OVERLAY ── */
+  /* ── CONFIG OVERLAY (Wizard) ── */
   #config-overlay {
     position: fixed; inset: 0; z-index: 200;
-    display: flex; justify-content: center; align-items: center;
+    display: flex; flex-direction: column; justify-content: center; align-items: center;
     background: #06080c;
   }
   #config-overlay.hidden { display: none; }
 
-  .cfg-container {
-    display: flex; width: 1100px; max-width: 96vw; min-height: 560px;
-    border: 1px solid rgba(255,255,255,0.06); border-radius: 6px;
-    background: rgba(255,255,255,0.015); overflow: hidden;
-    box-shadow: 0 0 120px rgba(0,0,0,0.6);
+  /* Progress bar */
+  .wiz-progress {
+    position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: rgba(255,255,255,0.04);
+  }
+  .wiz-progress-fill {
+    height: 100%; background: #00ff88; transition: width 0.4s ease;
+    box-shadow: 0 0 12px rgba(0,255,136,0.3);
   }
 
-  /* Left: branding + description */
-  .cfg-left {
-    width: 420px; min-width: 420px; padding: 64px 48px;
-    background: rgba(0,255,136,0.015);
-    border-right: 1px solid rgba(255,255,255,0.05);
-    display: flex; flex-direction: column; justify-content: center;
-  }
-  .cfg-eyebrow {
-    font-size: 11px; letter-spacing: 4px; text-transform: uppercase;
-    color: rgba(0,255,136,0.5); margin-bottom: 18px; font-weight: 700;
-  }
-  .cfg-title {
-    font-size: 48px; font-weight: 800; letter-spacing: 4px; color: #fff;
-    line-height: 1.1; margin-bottom: 8px;
-  }
-  .cfg-title-sub {
-    font-size: 14px; letter-spacing: 4px; text-transform: uppercase;
-    color: rgba(255,255,255,0.2); margin-bottom: 32px;
-  }
-  .cfg-desc {
-    font-size: 13px; line-height: 1.8; color: rgba(255,255,255,0.35);
-    margin-bottom: 36px;
-  }
-  .cfg-apis {
-    display: flex; flex-direction: column; gap: 10px;
-  }
-  .cfg-api-row {
-    display: flex; align-items: center; gap: 10px;
-    font-size: 12px; color: rgba(255,255,255,0.3);
-  }
-  .cfg-api-dot {
-    width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
-  }
-  .cfg-api-dot.green { background: #00ff88; box-shadow: 0 0 6px rgba(0,255,136,0.4); }
-  .cfg-api-dot.amber { background: #ffaa00; box-shadow: 0 0 6px rgba(255,170,0,0.4); }
-  .cfg-api-name { font-weight: 700; color: rgba(255,255,255,0.55); min-width: 110px; }
-
-  /* Right: configuration form */
-  .cfg-right {
-    flex: 1; padding: 52px 52px; display: flex; flex-direction: column; justify-content: center;
-  }
-  .cfg-form-title {
-    font-size: 12px; letter-spacing: 4px; text-transform: uppercase;
-    color: rgba(255,255,255,0.25); margin-bottom: 32px; font-weight: 700;
-    padding-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,0.05);
+  /* Step counter */
+  .wiz-step-indicator {
+    position: absolute; top: 28px; right: 40px;
+    font-size: 13px; letter-spacing: 2px; color: rgba(255,255,255,0.15);
   }
 
-  .cfg-field { margin-bottom: 28px; }
-  .cfg-label {
-    font-size: 12px; letter-spacing: 2px; opacity: 0.4; margin-bottom: 10px;
-    text-transform: uppercase; font-weight: 600;
+  /* Each step */
+  .wiz-step {
+    display: none; flex-direction: column; align-items: center;
+    text-align: center; max-width: 700px; width: 90vw;
+    animation: wizFadeIn 0.35s ease;
+  }
+  .wiz-step.active { display: flex; }
+  @keyframes wizFadeIn {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 
-  .mode-toggle { display: flex; gap: 0; border-radius: 4px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1); }
-  .mode-btn {
-    padding: 14px 0; font-size: 13px; font-weight: 600; border: none; cursor: pointer;
-    background: transparent; color: rgba(255,255,255,0.25); transition: all 0.2s;
-    font-family: 'JetBrains Mono', monospace; letter-spacing: 2px; flex: 1; text-align: center;
+  /* Step question */
+  .wiz-question {
+    font-size: 32px; font-weight: 700; color: #fff; letter-spacing: 1px;
+    margin-bottom: 12px; line-height: 1.3;
   }
-  .mode-btn.active { background: rgba(0,255,136,0.06); color: #00ff88; }
-  .mode-btn:hover { color: rgba(255,255,255,0.5); }
-  .mode-hint { font-size: 11px; opacity: 0.2; margin-top: 8px; }
+  .wiz-subtitle {
+    font-size: 15px; color: rgba(255,255,255,0.25); margin-bottom: 48px;
+    line-height: 1.6; max-width: 520px;
+  }
 
-  .presets { display: flex; gap: 6px; }
-  .preset-btn {
-    padding: 14px 0; font-size: 14px; font-weight: 700; flex: 1; text-align: center;
-    font-family: 'JetBrains Mono', monospace;
-    border: 1px solid rgba(255,255,255,0.08); border-radius: 4px;
-    background: transparent; color: rgba(255,255,255,0.35); cursor: pointer;
-    transition: all 0.2s; letter-spacing: 1px;
+  /* Option cards (clickable) */
+  .wiz-options { display: flex; gap: 16px; width: 100%; justify-content: center; flex-wrap: wrap; }
+  .wiz-option {
+    flex: 1; min-width: 200px; max-width: 320px; padding: 28px 24px;
+    border: 1px solid rgba(255,255,255,0.08); border-radius: 8px;
+    background: rgba(255,255,255,0.02); cursor: pointer;
+    transition: all 0.2s; text-align: center;
   }
-  .preset-btn:hover { border-color: rgba(0,255,136,0.25); color: #00ff88; }
-  .preset-btn.selected { background: rgba(0,255,136,0.06); border-color: rgba(0,255,136,0.3); color: #00ff88; }
+  .wiz-option:hover {
+    border-color: rgba(0,255,136,0.3); background: rgba(0,255,136,0.03);
+  }
+  .wiz-option.selected {
+    border-color: rgba(0,255,136,0.5); background: rgba(0,255,136,0.06);
+  }
+  .wiz-option-title {
+    font-size: 20px; font-weight: 700; color: #fff; margin-bottom: 8px;
+    letter-spacing: 1px;
+  }
+  .wiz-option.selected .wiz-option-title { color: #00ff88; }
+  .wiz-option-desc {
+    font-size: 13px; color: rgba(255,255,255,0.3); line-height: 1.5;
+  }
 
-  .cfg-agents-row { display: flex; gap: 14px; }
-  .cfg-agent-card {
-    flex: 1; padding: 16px 18px;
-    border: 1px solid rgba(255,255,255,0.06); border-radius: 4px;
-    background: rgba(255,255,255,0.015);
+  /* Grid count buttons */
+  .wiz-grid-options { display: flex; gap: 12px; justify-content: center; }
+  .wiz-grid-btn {
+    width: 80px; height: 80px; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 4px;
+    border: 1px solid rgba(255,255,255,0.08); border-radius: 8px;
+    background: rgba(255,255,255,0.02); cursor: pointer;
+    transition: all 0.2s; font-family: 'JetBrains Mono', monospace;
   }
-  .cfg-agent-card.red { border-color: rgba(255,60,60,0.15); }
-  .cfg-agent-card.blue { border-color: rgba(60,100,255,0.15); }
-  .cfg-agent-label {
-    font-size: 11px; font-weight: 700; letter-spacing: 2px; margin-bottom: 10px;
+  .wiz-grid-btn:hover {
+    border-color: rgba(0,255,136,0.3); background: rgba(0,255,136,0.03);
   }
-  .cfg-agent-label.red { color: rgba(255,107,107,0.8); }
-  .cfg-agent-label.blue { color: rgba(107,163,255,0.8); }
-  .cfg-agent-card select {
-    width: 100%; font-family: 'JetBrains Mono', monospace; font-size: 13px;
-    background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 3px; color: rgba(255,255,255,0.6); padding: 10px 12px; cursor: pointer;
+  .wiz-grid-btn.selected {
+    border-color: rgba(0,255,136,0.5); background: rgba(0,255,136,0.06);
   }
-  .cfg-agent-card select:focus { outline: none; border-color: rgba(0,255,136,0.3); }
+  .wiz-grid-btn .wiz-grid-num {
+    font-size: 28px; font-weight: 800; color: rgba(255,255,255,0.5);
+  }
+  .wiz-grid-btn.selected .wiz-grid-num { color: #00ff88; }
+  .wiz-grid-btn .wiz-grid-label {
+    font-size: 10px; color: rgba(255,255,255,0.2); letter-spacing: 1px;
+  }
 
-  .cfg-output-info {
-    display: flex; gap: 24px; padding: 14px 18px;
-    background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05);
-    border-radius: 4px; margin-bottom: 28px;
+  /* Agent cards for step 3 */
+  .wiz-agents { display: flex; gap: 20px; width: 100%; max-width: 600px; }
+  .wiz-agent-box {
+    flex: 1; padding: 28px 20px; border-radius: 8px; text-align: center;
+    border: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.02);
   }
-  .cfg-output-item {
-    font-size: 11px; color: rgba(255,255,255,0.35); letter-spacing: 0.5px;
-    display: flex; align-items: center; gap: 6px;
+  .wiz-agent-box.red { border-color: rgba(255,80,80,0.2); }
+  .wiz-agent-box.blue { border-color: rgba(80,130,255,0.2); }
+  .wiz-agent-name {
+    font-size: 14px; font-weight: 800; letter-spacing: 3px; margin-bottom: 16px;
   }
-  .cfg-output-item strong { color: rgba(255,255,255,0.55); font-weight: 700; }
+  .wiz-agent-name.red { color: #ff6b6b; }
+  .wiz-agent-name.blue { color: #6ba3ff; }
+  .wiz-agent-box select {
+    width: 100%; font-family: 'JetBrains Mono', monospace; font-size: 15px;
+    background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 6px; color: rgba(255,255,255,0.7); padding: 14px 16px;
+    cursor: pointer; text-align: center; appearance: none;
+  }
+  .wiz-agent-box select:focus { outline: none; border-color: rgba(0,255,136,0.4); }
 
-  .config-row { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
-  .config-row input {
-    width: 50px; text-align: center; font-size: 18px; font-weight: 700;
-    font-family: 'JetBrains Mono', monospace;
-    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 3px; color: #fff; padding: 6px 4px;
+  /* Navigation */
+  .wiz-nav {
+    margin-top: 48px; display: flex; gap: 12px; align-items: center;
   }
-  .config-row input:focus { outline: none; border-color: rgba(0,255,136,0.4); }
-  .config-row span { font-size: 16px; font-weight: 700; opacity: 0.2; }
-
-  .config-scenario {
-    display: flex; flex-direction: column; align-items: center;
-    margin-bottom: 20px; gap: 8px;
-  }
-  .config-scenario select {
-    font-family: 'JetBrains Mono', monospace; font-size: 11px;
-    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 3px; color: #fff; padding: 7px 14px; cursor: pointer;
-    min-width: 200px; text-align: center;
-  }
-  .config-scenario select:focus { outline: none; border-color: rgba(0,255,136,0.4); }
-
-  #deploy-btn {
-    width: 100%; padding: 18px 0; font-size: 14px; font-weight: 800;
-    font-family: 'JetBrains Mono', monospace; letter-spacing: 5px;
-    border: 1px solid rgba(0,255,136,0.3); border-radius: 4px; cursor: pointer;
-    background: rgba(0,255,136,0.04); color: #00ff88;
+  .wiz-nav-btn {
+    padding: 16px 40px; font-size: 15px; font-weight: 700;
+    font-family: 'JetBrains Mono', monospace; letter-spacing: 3px;
+    border: 1px solid rgba(255,255,255,0.1); border-radius: 6px;
+    background: transparent; color: rgba(255,255,255,0.4); cursor: pointer;
     transition: all 0.2s; text-transform: uppercase;
   }
-  #deploy-btn:hover {
+  .wiz-nav-btn:hover { color: #fff; border-color: rgba(255,255,255,0.25); }
+  .wiz-nav-btn.primary {
+    border-color: rgba(0,255,136,0.4); color: #00ff88;
+    background: rgba(0,255,136,0.04);
+  }
+  .wiz-nav-btn.primary:hover {
     background: rgba(0,255,136,0.1);
-    box-shadow: 0 0 40px rgba(0,255,136,0.15);
+    box-shadow: 0 0 40px rgba(0,255,136,0.12);
   }
-  .cfg-footer {
-    margin-top: 20px; font-size: 11px; opacity: 0.15; letter-spacing: 2px;
-    text-transform: uppercase; text-align: center;
+  .wiz-nav-btn.launch {
+    padding: 20px 64px; font-size: 18px; letter-spacing: 5px;
+    border-color: rgba(0,255,136,0.5); color: #00ff88;
+    background: rgba(0,255,136,0.06);
   }
+  .wiz-nav-btn.launch:hover {
+    background: rgba(0,255,136,0.14);
+    box-shadow: 0 0 60px rgba(0,255,136,0.2);
+  }
+
+  /* Intro step branding */
+  .wiz-logo {
+    font-size: 64px; font-weight: 800; letter-spacing: 8px; color: #fff;
+    margin-bottom: 8px;
+  }
+  .wiz-logo-sub {
+    font-size: 16px; letter-spacing: 5px; text-transform: uppercase;
+    color: rgba(255,255,255,0.2); margin-bottom: 20px;
+  }
+  .wiz-intro-desc {
+    font-size: 16px; line-height: 1.8; color: rgba(255,255,255,0.3);
+    max-width: 560px; margin-bottom: 36px;
+  }
+  .wiz-apis {
+    display: flex; gap: 28px; margin-bottom: 48px;
+  }
+  .wiz-api {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: rgba(255,255,255,0.3);
+  }
+  .wiz-api-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+  }
+  .wiz-api-dot.green { background: #00ff88; box-shadow: 0 0 8px rgba(0,255,136,0.4); }
+  .wiz-api-dot.amber { background: #ffaa00; box-shadow: 0 0 8px rgba(255,170,0,0.4); }
+  .wiz-api strong { color: rgba(255,255,255,0.5); }
+
+  /* Summary step */
+  .wiz-summary {
+    display: flex; flex-direction: column; gap: 12px; width: 100%;
+    max-width: 480px; margin-bottom: 8px;
+  }
+  .wiz-summary-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 14px 20px; border-radius: 6px;
+    background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05);
+  }
+  .wiz-summary-label { font-size: 13px; color: rgba(255,255,255,0.3); letter-spacing: 1px; }
+  .wiz-summary-value { font-size: 15px; font-weight: 700; color: #00ff88; letter-spacing: 1px; }
+
+  /* Hidden helper */
+  .wiz-hidden { display: none !important; }
 
   /* ── TOP COMMAND BAR ── */
   #top-bar {
@@ -512,95 +540,138 @@
 
 <!-- ── CONFIG OVERLAY ── -->
 <div id="config-overlay">
-  <div class="cfg-container">
-    <!-- Left: Branding + Context -->
-    <div class="cfg-left">
-      <div class="cfg-eyebrow">Research Tool</div>
-      <div class="cfg-title">AWA</div>
-      <div class="cfg-title-sub">Adversarial World Agents</div>
-      <div class="cfg-desc">
-        Drop two AI agents into adversarial combat simulations. Every move, every decision, every outcome is captured as structured multimodal training data — reasoning chains, tactical frames, and game state.
+  <!-- Progress bar -->
+  <div class="wiz-progress"><div class="wiz-progress-fill" id="wiz-progress" style="width:0%"></div></div>
+  <div class="wiz-step-indicator" id="wiz-indicator"></div>
+
+  <!-- Hidden inputs -->
+  <input type="hidden" id="cols-input" value="3">
+  <input type="hidden" id="rows-input" value="2">
+
+  <!-- STEP 0: Intro / Welcome -->
+  <div class="wiz-step active" data-step="0">
+    <div class="wiz-logo">AWA</div>
+    <div class="wiz-logo-sub">Adversarial World Agents</div>
+    <div class="wiz-intro-desc">
+      Two AI agents fight in real-time combat simulations. Every decision is captured as structured multimodal training data.
+    </div>
+    <div class="wiz-apis">
+      <div class="wiz-api"><div class="wiz-api-dot green"></div><strong>Gemini 2.5</strong>&nbsp; reasoning</div>
+      <div class="wiz-api"><div class="wiz-api-dot green"></div><strong>NanoBanana</strong>&nbsp; frames</div>
+      <div class="wiz-api"><div class="wiz-api-dot amber"></div><strong>Lyria</strong>&nbsp; audio</div>
+    </div>
+    <div class="wiz-nav">
+      <button class="wiz-nav-btn primary" onclick="wizNext()">Get Started</button>
+    </div>
+  </div>
+
+  <!-- STEP 1: Engine mode -->
+  <div class="wiz-step" data-step="1">
+    <div class="wiz-question">Choose an engine mode</div>
+    <div class="wiz-subtitle">Same Engine runs our custom physics with full data capture. Multi Engine shows 10 different rendering approaches side-by-side.</div>
+    <div class="wiz-options">
+      <div class="wiz-option selected" onclick="wizSelectMode('same', this)">
+        <div class="wiz-option-title">Same Engine</div>
+        <div class="wiz-option-desc">One physics engine, multiple parallel war scenarios with full LLM control</div>
       </div>
-      <div class="cfg-apis">
-        <div class="cfg-api-row">
-          <div class="cfg-api-dot green"></div>
-          <span class="cfg-api-name">Gemini 2.5</span>
-          <span>Agent reasoning + move selection</span>
-        </div>
-        <div class="cfg-api-row">
-          <div class="cfg-api-dot green"></div>
-          <span class="cfg-api-name">NanoBanana</span>
-          <span>Tactical frame generation</span>
-        </div>
-        <div class="cfg-api-row">
-          <div class="cfg-api-dot amber"></div>
-          <span class="cfg-api-name">Lyria</span>
-          <span>Spatial audio (pending)</span>
-        </div>
+      <div class="wiz-option" onclick="wizSelectMode('multi', this)">
+        <div class="wiz-option-title">Multi Engine</div>
+        <div class="wiz-option-desc">10 different renderers (Canvas, Three.js, Babylon, WebGPU, PixiJS...)</div>
       </div>
     </div>
+    <div class="wiz-nav">
+      <button class="wiz-nav-btn" onclick="wizBack()">Back</button>
+      <button class="wiz-nav-btn primary" onclick="wizNext()">Next</button>
+    </div>
+  </div>
 
-    <!-- Right: Configuration -->
-    <div class="cfg-right">
-      <div class="cfg-form-title">Configure Data Generation Run</div>
-
-      <!-- Output preview -->
-      <div class="cfg-output-info">
-        <div class="cfg-output-item"><strong>Output:</strong> JSONL dataset</div>
-        <div class="cfg-output-item"><strong>Per turn:</strong> state + reasoning + frame</div>
-        <div class="cfg-output-item"><strong>Agents:</strong> 2 adversarial</div>
+  <!-- STEP 2: How many scenarios -->
+  <div class="wiz-step" data-step="2">
+    <div class="wiz-question">How many parallel scenarios?</div>
+    <div class="wiz-subtitle">Each scenario runs a different combat configuration simultaneously. More scenarios = more training data per run.</div>
+    <div class="wiz-grid-options" id="grid-presets">
+      <div class="wiz-grid-btn" onclick="wizSelectGrid(2,1,this)">
+        <div class="wiz-grid-num">2</div>
+        <div class="wiz-grid-label">2 x 1</div>
       </div>
-
-      <!-- Engine mode -->
-      <div class="cfg-field">
-        <div class="cfg-label">Engine Mode</div>
-        <div class="mode-toggle">
-          <button class="mode-btn active" onclick="setMode('same')" id="mode-same">SAME ENGINE</button>
-          <button class="mode-btn" onclick="setMode('multi')" id="mode-multi">MULTI ENGINE</button>
-        </div>
-        <div class="mode-hint" id="mode-hint">Single physics engine, multiple parallel scenarios</div>
+      <div class="wiz-grid-btn" onclick="wizSelectGrid(2,2,this)">
+        <div class="wiz-grid-num">4</div>
+        <div class="wiz-grid-label">2 x 2</div>
       </div>
-
-      <!-- Parallel scenarios -->
-      <div class="cfg-field">
-        <div class="cfg-label">Parallel Scenarios</div>
-        <div class="presets" id="grid-presets">
-          <button class="preset-btn" onclick="setGrid(2,1)">2</button>
-          <button class="preset-btn" onclick="setGrid(2,2)">4</button>
-          <button class="preset-btn selected" onclick="setGrid(3,2)">6</button>
-          <button class="preset-btn" onclick="setGrid(3,3)">9</button>
-          <button class="preset-btn" onclick="setGrid(4,3)">12</button>
-        </div>
+      <div class="wiz-grid-btn selected" onclick="wizSelectGrid(3,2,this)">
+        <div class="wiz-grid-num">6</div>
+        <div class="wiz-grid-label">3 x 2</div>
       </div>
-
-      <!-- Agent controllers -->
-      <div class="cfg-field">
-        <div class="cfg-label">Agent Controllers</div>
-        <div class="cfg-agents-row">
-          <div class="cfg-agent-card red">
-            <div class="cfg-agent-label red">RED AGENT</div>
-            <select id="red-agent-select">
-              <option value="gemini" selected>Gemini AI (LLM)</option>
-              <option value="hardcoded">Hardcoded Heuristic</option>
-            </select>
-          </div>
-          <div class="cfg-agent-card blue">
-            <div class="cfg-agent-label blue">BLUE AGENT</div>
-            <select id="blue-agent-select">
-              <option value="gemini" selected>Gemini AI (LLM)</option>
-              <option value="hardcoded">Hardcoded Heuristic</option>
-            </select>
-          </div>
-        </div>
+      <div class="wiz-grid-btn" onclick="wizSelectGrid(3,3,this)">
+        <div class="wiz-grid-num">9</div>
+        <div class="wiz-grid-label">3 x 3</div>
       </div>
+      <div class="wiz-grid-btn" onclick="wizSelectGrid(4,3,this)">
+        <div class="wiz-grid-num">12</div>
+        <div class="wiz-grid-label">4 x 3</div>
+      </div>
+    </div>
+    <div class="wiz-nav">
+      <button class="wiz-nav-btn" onclick="wizBack()">Back</button>
+      <button class="wiz-nav-btn primary" onclick="wizNext()">Next</button>
+    </div>
+  </div>
 
-      <!-- Hidden inputs for grid size -->
-      <input type="hidden" id="cols-input" value="3">
-      <input type="hidden" id="rows-input" value="2">
+  <!-- STEP 3: Agent controllers -->
+  <div class="wiz-step" data-step="3">
+    <div class="wiz-question">Who controls each army?</div>
+    <div class="wiz-subtitle">Gemini AI makes real-time strategic decisions via LLM. Hardcoded uses a simple heuristic for comparison.</div>
+    <div class="wiz-agents">
+      <div class="wiz-agent-box red">
+        <div class="wiz-agent-name red">RED AGENT</div>
+        <select id="red-agent-select">
+          <option value="gemini" selected>Gemini AI</option>
+          <option value="hardcoded">Hardcoded</option>
+        </select>
+      </div>
+      <div class="wiz-agent-box blue">
+        <div class="wiz-agent-name blue">BLUE AGENT</div>
+        <select id="blue-agent-select">
+          <option value="gemini" selected>Gemini AI</option>
+          <option value="hardcoded">Hardcoded</option>
+        </select>
+      </div>
+    </div>
+    <div class="wiz-nav">
+      <button class="wiz-nav-btn" onclick="wizBack()">Back</button>
+      <button class="wiz-nav-btn primary" onclick="wizNext()">Next</button>
+    </div>
+  </div>
 
-      <!-- Launch -->
-      <button id="deploy-btn" onclick="launch()">Begin Data Generation</button>
-      <div class="cfg-footer">YC x Google DeepMind Multimodal Frontier Hackathon 2026</div>
+  <!-- STEP 4: Summary + Launch -->
+  <div class="wiz-step" data-step="4">
+    <div class="wiz-question">Ready to generate</div>
+    <div class="wiz-subtitle">Training data will be captured every turn: game state, agent reasoning chains, and tactical frames.</div>
+    <div class="wiz-summary">
+      <div class="wiz-summary-row">
+        <span class="wiz-summary-label">Engine</span>
+        <span class="wiz-summary-value" id="sum-engine">SAME ENGINE</span>
+      </div>
+      <div class="wiz-summary-row">
+        <span class="wiz-summary-label">Scenarios</span>
+        <span class="wiz-summary-value" id="sum-scenarios">6</span>
+      </div>
+      <div class="wiz-summary-row">
+        <span class="wiz-summary-label">Red Agent</span>
+        <span class="wiz-summary-value" id="sum-red">GEMINI AI</span>
+      </div>
+      <div class="wiz-summary-row">
+        <span class="wiz-summary-label">Blue Agent</span>
+        <span class="wiz-summary-value" id="sum-blue">GEMINI AI</span>
+      </div>
+      <div class="wiz-summary-row">
+        <span class="wiz-summary-label">Output</span>
+        <span class="wiz-summary-value">JSONL + Frames</span>
+      </div>
+    </div>
+    <div class="wiz-nav">
+      <button class="wiz-nav-btn" onclick="wizBack()">Back</button>
+      <button class="wiz-nav-btn launch" onclick="launch()">Generate</button>
     </div>
   </div>
 </div>
@@ -762,21 +833,62 @@ const CAPTURE_INTERVAL = 4; // seconds
 // ============================================================
 function setMode(m) {
   currentMode = m;
-  document.getElementById('mode-same').classList.toggle('active', m === 'same');
-  document.getElementById('mode-multi').classList.toggle('active', m === 'multi');
-  document.getElementById('mode-hint').textContent = m === 'same'
-    ? 'Single engine, multiple war scenarios'
-    : '10 different engines (Canvas, Three.js, Babylon, WebGPU...)';
 }
 
 function setGrid(c, r) {
   document.getElementById('cols-input').value = c;
   document.getElementById('rows-input').value = r;
-  // Highlight selected preset
-  const btns = document.querySelectorAll('#grid-presets .preset-btn');
-  btns.forEach(b => b.classList.remove('selected'));
-  const total = c * r;
-  btns.forEach(b => { if (b.textContent.trim() === String(total)) b.classList.add('selected'); });
+}
+
+// ============================================================
+// WIZARD NAVIGATION
+// ============================================================
+let wizStep = 0;
+const WIZ_TOTAL = 5; // steps 0-4
+
+function wizUpdateUI() {
+  // Show/hide steps
+  document.querySelectorAll('.wiz-step').forEach(s => {
+    s.classList.toggle('active', parseInt(s.dataset.step) === wizStep);
+  });
+  // Progress bar
+  const pct = wizStep === 0 ? 0 : Math.round((wizStep / (WIZ_TOTAL - 1)) * 100);
+  document.getElementById('wiz-progress').style.width = pct + '%';
+  // Step indicator
+  const ind = document.getElementById('wiz-indicator');
+  ind.textContent = wizStep === 0 ? '' : `${wizStep} / ${WIZ_TOTAL - 1}`;
+
+  // Populate summary on step 4
+  if (wizStep === 4) {
+    const cols = parseInt(document.getElementById('cols-input').value) || 3;
+    const rows = parseInt(document.getElementById('rows-input').value) || 2;
+    document.getElementById('sum-engine').textContent = currentMode === 'same' ? 'SAME ENGINE' : 'MULTI ENGINE';
+    document.getElementById('sum-scenarios').textContent = String(cols * rows);
+    const rSel = document.getElementById('red-agent-select');
+    const bSel = document.getElementById('blue-agent-select');
+    document.getElementById('sum-red').textContent = rSel.value === 'gemini' ? 'GEMINI AI' : 'HARDCODED';
+    document.getElementById('sum-blue').textContent = bSel.value === 'gemini' ? 'GEMINI AI' : 'HARDCODED';
+  }
+}
+
+function wizNext() {
+  if (wizStep < WIZ_TOTAL - 1) { wizStep++; wizUpdateUI(); }
+}
+
+function wizBack() {
+  if (wizStep > 0) { wizStep--; wizUpdateUI(); }
+}
+
+function wizSelectMode(mode, el) {
+  setMode(mode);
+  el.closest('.wiz-options').querySelectorAll('.wiz-option').forEach(o => o.classList.remove('selected'));
+  el.classList.add('selected');
+}
+
+function wizSelectGrid(c, r, el) {
+  setGrid(c, r);
+  el.closest('.wiz-grid-options').querySelectorAll('.wiz-grid-btn').forEach(b => b.classList.remove('selected'));
+  el.classList.add('selected');
 }
 
 function launch() {
