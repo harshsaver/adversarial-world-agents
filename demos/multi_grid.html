@@ -587,8 +587,8 @@
   </div>
   <div class="bottom-center">
     <div class="stat-item">KILLS <span class="stat-val" id="stat-kills-r" style="color:#ff6b6b">0</span>/<span class="stat-val" id="stat-kills-b" style="color:#6ba3ff">0</span></div>
-    <div class="stat-item" style="color:#ff6b6b">RED <span class="stat-val" id="red-move-display" style="color:#ff9b9b;font-size:9px">ATTACK_NEAREST</span></div>
-    <div class="stat-item" style="color:#6ba3ff">BLU <span class="stat-val" id="blue-move-display" style="color:#9bc3ff;font-size:9px">DEFEND_OBJECTIVE</span></div>
+    <div class="stat-item" style="color:#ff6b6b">RED <span class="stat-val" id="red-move-display" style="color:#ff9b9b;font-size:9px">HOLD_POSITION [WAITING]</span></div>
+    <div class="stat-item" style="color:#6ba3ff">BLU <span class="stat-val" id="blue-move-display" style="color:#9bc3ff;font-size:9px">HOLD_POSITION [WAITING]</span></div>
     <div class="stat-item">ENGAGEMENTS <span class="stat-val" id="stat-engagements">0</span></div>
   </div>
   <div class="bottom-right">
@@ -639,11 +639,12 @@ const AGENT_MOVES = [
   'HOLD_POSITION',     // stop moving, shoot anything in range
 ];
 
-let redMove = 'ATTACK_NEAREST';
-let blueMove = 'DEFEND_OBJECTIVE';
+let redMove = 'HOLD_POSITION';  // default: wait for Gemini's first order
+let blueMove = 'HOLD_POSITION'; // default: wait for Gemini's first order
 let agentControlEnabled = true; // set false to revert to hardcoded AI
 let agentInFlight = false; // prevent overlapping agent calls
 let lastAgentCallTime = 0; // track when last call was made
+let agentMoveCount = 0; // how many successful LLM move updates
 const AGENT_CALL_INTERVAL = 2000; // ms between agent API calls
 
 // Training pipeline state
@@ -661,8 +662,8 @@ function setMode(m) {
   document.getElementById('mode-same').classList.toggle('active', m === 'same');
   document.getElementById('mode-multi').classList.toggle('active', m === 'multi');
   document.getElementById('mode-hint').textContent = m === 'same'
-    ? 'Single lightweight engine, different scenarios'
-    : 'Multiple demo engines (Canvas, Matter.js, Three.js, etc.)';
+    ? 'Single engine, multiple war scenarios'
+    : '10 different engines (Canvas, Three.js, Babylon, WebGPU...)';
 }
 
 function setGrid(c, r) {
@@ -722,6 +723,8 @@ function resetGrid() {
   redHealth = 100; blueHealth = 100;
   redKills = 0; blueKills = 0; engagements = 0; currentPhase = 0;
   geminiCallCount = 0; iframeReports.clear();
+  redMove = 'HOLD_POSITION'; blueMove = 'HOLD_POSITION';
+  agentInFlight = false; lastAgentCallTime = 0; agentMoveCount = 0;
   reasoningStore = {}; screenshotStore = {};
   window._completionShown = false;
   const compOverlay = document.getElementById('completion-overlay');
@@ -841,10 +844,8 @@ function advanceTurn() {
   document.getElementById('stat-territory').textContent =
     `${Math.max(5, Math.min(95, 100 - territory))}/${Math.max(5, Math.min(95, territory))}`;
 
-  // Only use old reasoning system if agent control is off (agent control handles its own reasoning)
-  if (!agentControlEnabled || currentMode === 'multi') {
-    requestGeminiReasoning(turnNumber);
-  }
+  // Run Gemini reasoning for sidebar (both modes)
+  requestGeminiReasoning(turnNumber);
 
   // Auto-capture training data every 3rd turn (both modes)
   if (turnNumber % 3 === 1) {
@@ -1190,20 +1191,27 @@ async function requestAgentMoves() {
     redMove = redResult.move;
     blueMove = blueResult.move;
 
+    agentMoveCount++;
     const redChanged = prevRed !== redMove;
     const blueChanged = prevBlue !== blueMove;
-    console.log(`%c[AGENT] MOVES APPLIED (${elapsed}ms):`, 'color: #ffaa00; font-weight: bold; font-size: 13px');
+    console.log(`%c[AGENT] MOVES APPLIED #${agentMoveCount} (${elapsed}ms):`, 'color: #ffaa00; font-weight: bold; font-size: 13px');
     console.log(`%c  RED: ${prevRed} → ${redMove} ${redChanged ? '*** CHANGED ***' : '(same)'}`, `color: #ff6b6b; font-weight: ${redChanged ? 'bold' : 'normal'}`);
     console.log(`%c  BLU: ${prevBlue} → ${blueMove} ${blueChanged ? '*** CHANGED ***' : '(same)'}`, `color: #6ba3ff; font-weight: ${blueChanged ? 'bold' : 'normal'}`);
     console.log(`[AGENT] RED reasoning:`, redResult.reasoning);
     console.log(`[AGENT] BLU reasoning:`, blueResult.reasoning);
-    console.log(`[AGENT] These moves are NOW controlling all units in updateGame() via applyMove()`);
+    console.log(`[AGENT] LLM move update #${agentMoveCount} — units are now executing these commands`);
 
-    // Update HUD move display
+    // Update HUD move display — flash green briefly to show LLM response arrived
     const redMoveEl = document.getElementById('red-move-display');
     const blueMoveEl = document.getElementById('blue-move-display');
-    if (redMoveEl) { redMoveEl.textContent = redMove; redMoveEl.style.transition = 'opacity 0.2s'; redMoveEl.style.opacity = '1'; }
-    if (blueMoveEl) { blueMoveEl.textContent = blueMove; blueMoveEl.style.transition = 'opacity 0.2s'; blueMoveEl.style.opacity = '1'; }
+    if (redMoveEl) {
+      redMoveEl.textContent = `${redMove} [LLM#${agentMoveCount}]`;
+      redMoveEl.style.color = '#00ff88'; setTimeout(() => { if(redMoveEl) redMoveEl.style.color = '#ff9b9b'; }, 800);
+    }
+    if (blueMoveEl) {
+      blueMoveEl.textContent = `${blueMove} [LLM#${agentMoveCount}]`;
+      blueMoveEl.style.color = '#00ff88'; setTimeout(() => { if(blueMoveEl) blueMoveEl.style.color = '#9bc3ff'; }, 800);
+    }
 
     // Feed reasoning into sidebar
     if (redResult.reasoning) insertReasoningEntry('red', turn, { ...redResult.reasoning, did: `${redMove}: ${redResult.reasoning.did || '--'}` });
@@ -1211,6 +1219,9 @@ async function requestAgentMoves() {
 
   } catch (err) {
     console.error(`[AGENT] Failed (${(performance.now()-t0).toFixed(0)}ms):`, err.message);
+    const errReasoning = { saw: 'API ERROR', plan: err.message, risk: '--', did: '--' };
+    insertReasoningEntry('red', turn, errReasoning);
+    insertReasoningEntry('blue', turn, errReasoning);
   } finally {
     agentInFlight = false;
   }
