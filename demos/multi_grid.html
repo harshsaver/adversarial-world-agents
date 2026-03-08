@@ -846,8 +846,10 @@ function advanceTurn() {
   if (territoryEl) territoryEl.textContent =
     `${Math.max(5, Math.min(95, 100 - territory))}/${Math.max(5, Math.min(95, territory))}`;
 
-  // Run Gemini reasoning for sidebar (both modes)
-  requestGeminiReasoning(turnNumber);
+  // Run Gemini reasoning: always in multi mode (no agent system), or when agent control is off in same mode
+  if (!agentControlEnabled || currentMode === 'multi') {
+    requestGeminiReasoning(turnNumber);
+  }
 
   // Auto-capture training data every 3rd turn (both modes)
   if (turnNumber % 3 === 1) {
@@ -1175,7 +1177,7 @@ async function requestAgentMoves() {
   const blueState = getAgentPerspective('blue');
 
   console.log('%c════════════════════════════════════════════', 'color: #ffaa00');
-  console.log(`%c[AGENT] MOVE REQUEST #${geminiCallCount + 1} (turn ${turn}) — ${new Date().toLocaleTimeString()}`, 'color: #ffaa00; font-weight: bold; font-size: 13px');
+  console.log(`%c[AGENT] MOVE REQUEST #${agentMoveCount + 1} (turn ${turn}) — ${new Date().toLocaleTimeString()}`, 'color: #ffaa00; font-weight: bold; font-size: 13px');
   console.log(`[AGENT] Current moves: RED=${redMove} | BLUE=${blueMove}`);
   console.log(`[AGENT] Agent control: ${agentControlEnabled ? 'ENABLED (LLM controls units)' : 'DISABLED (hardcoded AI)'}`);
   console.log(`[AGENT] Model: ${REASONING_MODEL} via OpenRouter`);
