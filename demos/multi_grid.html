@@ -184,19 +184,6 @@
   .wiz-api-dot.amber { background: #ffaa00; box-shadow: 0 0 8px rgba(255,170,0,0.4); }
   .wiz-api strong { color: rgba(255,255,255,0.5); }
 
-  /* Summary step */
-  .wiz-summary {
-    display: flex; flex-direction: column; gap: 12px; width: 100%;
-    max-width: 480px; margin-bottom: 8px;
-  }
-  .wiz-summary-row {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 14px 20px; border-radius: 6px;
-    background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.05);
-  }
-  .wiz-summary-label { font-size: 13px; color: rgba(255,255,255,0.3); letter-spacing: 1px; }
-  .wiz-summary-value { font-size: 15px; font-weight: 700; color: #00ff88; letter-spacing: 1px; }
-
   /* Hidden helper */
   .wiz-hidden { display: none !important; }
 
@@ -639,38 +626,6 @@
     </div>
     <div class="wiz-nav">
       <button class="wiz-nav-btn" onclick="wizBack()">Back</button>
-      <button class="wiz-nav-btn primary" onclick="wizNext()">Next</button>
-    </div>
-  </div>
-
-  <!-- STEP 4: Summary + Launch -->
-  <div class="wiz-step" data-step="4">
-    <div class="wiz-question">Ready to generate</div>
-    <div class="wiz-subtitle">Training data will be captured every turn: game state, agent reasoning chains, and tactical frames.</div>
-    <div class="wiz-summary">
-      <div class="wiz-summary-row">
-        <span class="wiz-summary-label">Engine</span>
-        <span class="wiz-summary-value" id="sum-engine">SAME ENGINE</span>
-      </div>
-      <div class="wiz-summary-row">
-        <span class="wiz-summary-label">Scenarios</span>
-        <span class="wiz-summary-value" id="sum-scenarios">6</span>
-      </div>
-      <div class="wiz-summary-row">
-        <span class="wiz-summary-label">Red Agent</span>
-        <span class="wiz-summary-value" id="sum-red">GEMINI AI</span>
-      </div>
-      <div class="wiz-summary-row">
-        <span class="wiz-summary-label">Blue Agent</span>
-        <span class="wiz-summary-value" id="sum-blue">GEMINI AI</span>
-      </div>
-      <div class="wiz-summary-row">
-        <span class="wiz-summary-label">Output</span>
-        <span class="wiz-summary-value">JSONL + Frames</span>
-      </div>
-    </div>
-    <div class="wiz-nav">
-      <button class="wiz-nav-btn" onclick="wizBack()">Back</button>
       <button class="wiz-nav-btn launch" onclick="launch()">Generate</button>
     </div>
   </div>
@@ -844,7 +799,7 @@ function setGrid(c, r) {
 // WIZARD NAVIGATION
 // ============================================================
 let wizStep = 0;
-const WIZ_TOTAL = 5; // steps 0-4
+const WIZ_TOTAL = 4; // steps 0-3
 
 function wizUpdateUI() {
   // Show/hide steps
@@ -858,17 +813,6 @@ function wizUpdateUI() {
   const ind = document.getElementById('wiz-indicator');
   ind.textContent = wizStep === 0 ? '' : `${wizStep} / ${WIZ_TOTAL - 1}`;
 
-  // Populate summary on step 4
-  if (wizStep === 4) {
-    const cols = parseInt(document.getElementById('cols-input').value) || 3;
-    const rows = parseInt(document.getElementById('rows-input').value) || 2;
-    document.getElementById('sum-engine').textContent = currentMode === 'same' ? 'SAME ENGINE' : 'MULTI ENGINE';
-    document.getElementById('sum-scenarios').textContent = String(cols * rows);
-    const rSel = document.getElementById('red-agent-select');
-    const bSel = document.getElementById('blue-agent-select');
-    document.getElementById('sum-red').textContent = rSel.value === 'gemini' ? 'GEMINI AI' : 'HARDCODED';
-    document.getElementById('sum-blue').textContent = bSel.value === 'gemini' ? 'GEMINI AI' : 'HARDCODED';
-  }
 }
 
 function wizNext() {
@@ -2264,10 +2208,18 @@ function buildMultiGrid(cols, rows) {
   container.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
   container.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
   const total = cols * rows;
-  const shuffled = [...DEMOS].sort(() => Math.random() - 0.5);
+
+  // Curated set for 4-grid multi-engine (best-looking demos)
+  const MULTI_4_PICKS = [
+    DEMOS.find(d => d.file.includes('babylon_demo')),
+    DEMOS.find(d => d.file.includes('playcanvas_demo')),
+    DEMOS.find(d => d.file.includes('isometric_demo')),
+    DEMOS.find(d => d.file.includes('matter_demo')),
+  ];
+  const demoList = (total === 4) ? MULTI_4_PICKS : [...DEMOS].sort(() => Math.random() - 0.5);
 
   for (let i = 0; i < total; i++) {
-    const demo = shuffled[i % shuffled.length];
+    const demo = demoList[i % demoList.length];
     const camNum = String(i + 1).padStart(2, '0');
     const cell = document.createElement('div');
     cell.className = 'cell';
